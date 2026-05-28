@@ -871,9 +871,17 @@ def main():
     # uninstall
     uns = subparsers.add_parser("uninstall", help="Remove tmpcli from system")
 
+    # ── auto-detect: bare file path or URL as first arg ──
+    if len(sys.argv) >= 2:
+        first = sys.argv[1]
+        if first not in ("up", "dl", "list", "catalog", "update", "uninstall", "-h", "--help") and not first.startswith("-"):
+            if re.match(r"^https?://", first):
+                sys.argv[1:2] = ["dl", first]
+            elif Path(first).exists():
+                sys.argv[1:2] = ["up", first]
+
     args = parser.parse_args()
     cli = TmpCli()
-
     if args.command in ("up",):
         kwargs = {}
         if args.service == "litterbox":
