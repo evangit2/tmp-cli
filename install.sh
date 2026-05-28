@@ -94,4 +94,3 @@ echo "    Quick start:"
 echo "      tmp list          # show services"
 echo "      tmp up file.txt   # smart upload"
 echo "      tmp dl <url>      # download"
-EOF
