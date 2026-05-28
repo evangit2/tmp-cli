@@ -1,10 +1,9 @@
 #!/bin/sh
-# tmp-cli installer - cross-platform single-line install
-# Usage: curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/main/install.sh | bash
+# tmp-cli installer — cross-platform single-line install
+# Usage: curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 
 set -e
 
-# Default GitHub raw URL - uses 'master' branch since that's the repo default
 REPO="${TMPCLI_REPO:-https://raw.githubusercontent.com/evangit2/tmp-cli/master}"
 TMPCLI_DIR="${TMPCLI_HOME:-$HOME/.tmp-cli}"
 BINDIR=""
@@ -45,23 +44,23 @@ fi
 # Download main script
 mkdir -p "$TMPCLI_DIR"
 echo "    Downloading from $REPO ..."
-curl -fsSL -o "$TMPCLI_DIR/tmp" "$REPO/tmp"
-chmod +x "$TMPCLI_DIR/tmp"
+curl -fsSL -o "$TMPCLI_DIR/tmpcli" "$REPO/tmpcli"
+chmod +x "$TMPCLI_DIR/tmpcli"
 
 # Create wrapper
-WRAPPER_SH="$BINDIR/tmp"
-cat > "$WRAPPER_SH" << EOF
+WRAPPER_SH="$BINDIR/tmpcli"
+cat > "$WRAPPER_SH" << 'EOF'
 #!/bin/sh
-exec python3 "$TMPCLI_DIR/tmp" "\$@"
+exec python3 "$HOME/.tmp-cli/tmpcli" "$@"
 EOF
 chmod +x "$WRAPPER_SH"
 
 # Windows batch wrapper
 if [ "$PLATFORM" = "windows" ]; then
-    WRAPPER_BAT="$BINDIR/tmp.bat"
+    WRAPPER_BAT="$BINDIR/tmpcli.bat"
     echo '@echo off' > "$WRAPPER_BAT"
-    echo "python3 %USERPROFILE%\\.tmp-cli\\tmp %*" >> "$WRAPPER_BAT"
-    echo "    Created tmp.bat"
+    echo "python3 %USERPROFILE%\\.tmp-cli\\tmpcli %*" >> "$WRAPPER_BAT"
+    echo "    Created tmpcli.bat"
 fi
 
 # PATH check
@@ -86,11 +85,13 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$BINDIR"; then
 fi
 
 echo ""
-echo "==> tmp-cli installed successfully"
+echo "==> tmpcli installed successfully"
 echo "    Binary: $WRAPPER_SH"
-echo "    Source: $TMPCLI_DIR/tmp"
+echo "    Source: $TMPCLI_DIR/tmpcli"
 echo ""
 echo "    Quick start:"
-echo "      tmp list          # show services"
-echo "      tmp up file.txt   # smart upload"
-echo "      tmp dl <url>      # download"
+echo "      tmpcli list          # show services"
+echo "      tmpcli up file.txt   # smart upload"
+echo "      tmpcli dl <url>      # download"
+echo "      tmpcli catalog       # service limits table"
+echo "      tmpcli update        # self-update from GitHub"
