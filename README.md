@@ -43,7 +43,7 @@ bash /tmp/install.sh
 | **catbox**      | ✓       | ✓        | 200 MB   | permanent  | Most reliable        |
 | **litterbox**   | ✓       | ✓        | 1 GB     | 1h–72h     | Catbox temp sister   |
 | **temp.sh**     | ✓       | ✓        | 4 GB     | 3 days     | Simple API           |
-| **gofile**      | ✓       | ✓        | unlimited| variable   | Dynamic token auth   |
+| **gofile**      | ✓       | ✓        | "unlimited"| variable   | Dynamic token auth   |
 | **pixeldrain**  | 🔑 key  | ✓        | 10 GB    | 60 days    | Pro/prepaid for anon |
 | **0x0.st**      | ✗(down)| ✓        | 512 MB   | 30d–1y     | Uploads disabled ATM |
 
