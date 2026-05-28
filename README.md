@@ -9,12 +9,28 @@ Upload files to catbox, litterbox, temp.sh, gofile, and download from any of the
 ## One-Line Install
 
 ```bash
-# Linux / macOS / WSL
+# Linux / macOS / WSL (read the script first if you're cautious)
 curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 
 # Or wget
 wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 ```
+
+<details>
+<summary>Don't like curl2bash? (click for manual install)</summary>
+
+```bash
+# 1. Download
+curl -fsSL -o /tmp/tmp https://raw.githubusercontent.com/evangit2/tmp-cli/master/tmp
+curl -fsSL -o /tmp/install.sh https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh
+
+# 2. Inspect
+cat /tmp/install.sh   # read it
+
+# 3. Run locally
+bash /tmp/install.sh
+```
+</details>
 
 **Requirements:** `python3` and `curl`. No compilation. No package managers. No root.
 
