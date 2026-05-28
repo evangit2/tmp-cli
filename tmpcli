@@ -587,7 +587,7 @@ class TmpCli:
         eligible = []
         for svc in candidates:
             s = self.services.get(svc)
-            if not s:
+            if not s or s.name == "termbin":  # exclude termbin from smart routing
                 continue
             if s.max_size_mb > 0 and size_mb > s.max_size_mb:
                 continue
