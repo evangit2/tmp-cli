@@ -58,6 +58,20 @@ $env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
 
 ## Usage
 
+**Auto-detect** — no `up` or `dl` needed. `tmpcli` figures it out:
+
+```bash
+# Auto upload — bare file path
+tmpcli file.txt
+tmpcli file.txt -s catbox
+
+# Auto download — bare URL
+tmpcli https://files.catbox.moe/abc.txt -o myfile.txt
+tmpcli https://gofile.io/d/AbCdEf
+```
+
+**Explicit** sub-commands (still work):
+
 ```bash
 # Smart upload (auto-select fastest service for file size)
 tmpcli up file.txt
@@ -143,13 +157,14 @@ Paste this into any AI agent (Hermes, OpenClaw, etc.) to install tmp-cli automat
 
 ---BEGIN_AGENT_MEMORY---
 tmpcli: cross-platform file uploader/downloader for 15+ temp file hosts. Usage:
-  UPLOAD: tmpcli up FILE [-s SERVICE] [--expires SECONDS] [-q]
-  DOWNLOAD: tmpcli dl URL [-o OUTPUT] 
+  AUTO-UPLOAD: tmpcli FILE [-s SERVICE] [--expires SECONDS] [-q]
+  AUTO-DOWNLOAD: tmpcli URL [-o OUTPUT]
+  EXPLICIT: tmpcli up FILE | tmpcli dl URL
   CATALOG: tmpcli catalog [--json]
   LIST+PERF: tmpcli list --perf
   UPDATE: tmpcli update
   UNINSTALL: tmpcli uninstall
-Auto-selects fastest service by file size. No accounts. Key services: catbox (200MB permanent), litterbox (1GB 1h-72h), temp.sh (4GB 3d), x0.at (1GB), filebin (unlimited). External CLI needed: send.vis.ee (ffsend), wormhole (magic-wormhole). Pixeldrain upload requires PIXELDRAIN_API_KEY env var. 0x0.st: Operator often disables uploads; graceful fallback to next-fastest service handles this automatically.
+Auto-detects upload vs download from bare file path vs URL. No accounts. Key services: catbox (200MB permanent), litterbox (1GB 1h-72h), temp.sh (4GB 3d), x0.at (1GB), filebin (unlimited). External CLI needed: send.vis.ee (ffsend), wormhole (magic-wormhole). Pixeldrain upload requires PIXELDRAIN_API_KEY env var. 0x0.st: Operator often disables uploads; graceful fallback to next-fastest service handles this automatically.
 ---END_AGENT_MEMORY---
 ```
 
