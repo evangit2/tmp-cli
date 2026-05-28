@@ -10,10 +10,10 @@ Upload files to catbox, litterbox, temp.sh, gofile, and download from any of the
 
 ```bash
 # Linux / macOS / WSL
-curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 
 # Or wget
-wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 ```
 
 **Requirements:** `python3` and `curl`. No compilation. No package managers. No root.

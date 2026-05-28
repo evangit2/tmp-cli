@@ -4,7 +4,8 @@
 
 set -e
 
-REPO="${TMPCLI_REPO:-https://raw.githubusercontent.com/evangit2/tmp-cli/main}"
+# Default GitHub raw URL - uses 'master' branch since that's the repo default
+REPO="${TMPCLI_REPO:-https://raw.githubusercontent.com/evangit2/tmp-cli/master}"
 TMPCLI_DIR="${TMPCLI_HOME:-$HOME/.tmp-cli}"
 BINDIR=""
 
