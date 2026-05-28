@@ -51,6 +51,27 @@ class UploadResult:
     service: str = ""
     file_id: str = ""
     token: str = ""
+    size_mb: float = 0.0
+    elapsed: float = 0.0
+
+def _fmt_size(size_mb: float) -> str:
+    if size_mb < 0.01:
+        return f"{size_mb*1024:.1f}KB"
+    if size_mb < 1024:
+        return f"{size_mb:.1f}MB"
+    return f"{size_mb/1024:.1f}GB"
+
+def _fmt_time(s: float) -> str:
+    if s < 1:
+        return f"{s*1000:.0f}ms"
+    if s < 60:
+        return f"{s:.1f}s"
+    return f"{s/60:.1f}m"
+
+def _fmt_speed(mbps: float) -> str:
+    if mbps < 0.01:
+        return f"{mbps*1024:.1f}KB/s"
+    return f"{mbps:.1f}MB/s"
 
 @dataclass
 class PerfRecord:
@@ -720,8 +741,8 @@ class TmpCli:
             svc_name = self.smart_select(file_path)
 
         svc = self.services[svc_name]
-        print(f"[*] Uploading to {svc_name}...", file=sys.stderr)
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        print(f"[*] {svc_name} upload {_fmt_size(size_mb)}...", end="", file=sys.stderr)
 
         t0 = time.time()
         success = False
@@ -729,6 +750,8 @@ class TmpCli:
             result = svc.upload(file_path, **kwargs)
             success = True
             elapsed = time.time() - t0
+            result.elapsed = elapsed
+            result.size_mb = size_mb
             self.record_upload(svc_name, elapsed, True, size_mb)
             return result
         except Exception as e:
@@ -870,12 +893,47 @@ def main():
         if args.quiet:
             print(result.url)
         else:
-            print(f"[+] Uploaded: {result.url}  ({result.service}, {result.expires_in})", file=sys.stderr)
+            speed = result.size_mb / result.elapsed if result.elapsed > 0 else 0
+            stats = f"{_fmt_size(result.size_mb)} in {_fmt_time(result.elapsed)} ({_fmt_speed(speed)})"
+            print(f"[+] {result.service} → {stats}", file=sys.stderr)
             print(result.url)
 
     elif args.command in ("dl",):
-        ok = cli.download(args.url, args.output)
-        sys.exit(0 if ok else 1)
+        url = args.url
+        parsed = urllib.parse.urlparse(url)
+        domain = parsed.netloc.lower()
+        svc_name = None
+        for name in cli.services:
+            key = name.replace(".", "")
+            if key in domain or name in domain:
+                svc_name = name
+                break
+
+        out = args.output
+        if not out:
+            fname = Path(url).name or "downloaded_file"
+            out = str(Path(os.getcwd()) / fname)
+
+        size_str = ""
+        t0 = time.time()
+        if svc_name:
+            print(f"[*] {svc_name} download...", file=sys.stderr, end="")
+            ok = cli.services[svc_name].download(url, out)
+        else:
+            print(f"[*] direct download...", file=sys.stderr, end="")
+            code, _, _ = cli.services["catbox"]._curl(["-o", str(out), url])
+            ok = code == 0 and os.path.exists(out) and os.path.getsize(out) > 0
+        elapsed = time.time() - t0
+
+        if ok and os.path.exists(out):
+            sz = os.path.getsize(out) / (1024*1024)
+            speed = sz / elapsed if elapsed > 0 else 0
+            stats = f"{_fmt_size(sz)} in {_fmt_time(elapsed)} ({_fmt_speed(speed)})"
+            print(f"\r[+] {svc_name or 'direct'} → {stats}  → {out}", file=sys.stderr)
+            sys.exit(0)
+        else:
+            print(f"\r[!] download failed", file=sys.stderr)
+            sys.exit(1)
 
     elif args.command == "list":
         print(f"{'Service':<16} {'Upload':<7} {'Download':<9} {'Max':<8} {'Expiry':<14} Notes")
