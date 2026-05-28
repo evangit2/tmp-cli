@@ -29,20 +29,16 @@ CATALOG = {
     "temp.sh":      {"upload":"✓","download":"✓","max_mb":4096,  "expiry":"3 days", "notes":"Simple API"},
     "gofile":       {"upload":"✓","download":"✓","max_mb":0,     "expiry":"variable","notes":"Dynamic token auth"},
     "pixeldrain":   {"upload":"🔑","download":"✓","max_mb":10240, "expiry":"60 days","notes":"Upload needs API key"},
-    "0x0":          {"upload":"✗","download":"✓","max_mb":512,   "expiry":"30d–1y","notes":"Uploads disabled"},
-    "termbin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"Netcat TCP: may timeout on some networks"},
+    "0x0":          {"upload":"✓*","download":"✓","max_mb":512,   "expiry":"30d–1y","notes":"Uploads often disabled by operator"},
+    "termbin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"TCP text-only"},
     "drop.plz.ac":  {"upload":"✓","download":"✓","max_mb":100,   "expiry":"60 min","notes":"Cloudflare-backed"},
     "sharenation":  {"upload":"✓","download":"✓","max_mb":250,   "expiry":"1 min–1 day","notes":"+5-download safeguard"},
     "x0.at":        {"upload":"✓","download":"✓","max_mb":1024,  "expiry":"unknown","notes":"CLI-friendly Austria host"},
     "uguu":         {"upload":"✓","download":"✓","max_mb":128,   "expiry":"3 hours","notes":"Pomf.se fork"},
     "tmpfiles":     {"upload":"✓","download":"✓","max_mb":100,   "expiry":"1 min–48h","notes":"/tmp/files rebrand"},
     "filebin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"Raw PUT, no expiry"},
-    "_skipped": {
-        "biohost": {"reason": "Cloudflare Turnstile captcha blocks automation"},
-        "juicebox": {"reason": "Upload API endpoint unknown / undocumented"},
-        "send.vis.ee": {"reason": "Client-side encryption required (use `ffsend` instead)"},
-        "wormhole": {"reason": "Client-side encryption required (use `wormhole-cli` instead)"},
-    },
+    "send.vis.ee":  {"upload":"✓*","download":"✓*","max_mb":2500, "expiry":"1d/20dl","notes":"Requires ffsend CLI"},
+    "wormhole":     {"upload":"✓*","download":"✓*","max_mb":10000, "expiry":"24h/100dl","notes":"Requires wormhole-cli"},
 }
 
 UPLOAD_SERVICES = [k for k in CATALOG if not k.startswith("_") and CATALOG[k]["upload"] != "✗"]
@@ -283,7 +279,6 @@ class NullPointerService(BaseService):
     name = "0x0"
     max_size_mb = 512
     default_expiry = "30d-1y"
-    DISABLED_MSG = "uploads disabled"
 
     def upload(self, file_path: str, **kwargs) -> UploadResult:
         args = ["-F", f"file=@{file_path}"]
@@ -293,8 +288,8 @@ class NullPointerService(BaseService):
             args += ["-F", f"expires={kwargs['expires']}"]
         args += ["https://0x0.st"]
         code, out, err = self._curl(args)
-        if self.DISABLED_MSG in out.lower() or "botnet" in out.lower():
-            raise RuntimeError("0x0.st: uploads temporarily disabled")
+        if "disabled" in (out + err).lower() or "botnet" in (out + err).lower():
+            raise RuntimeError("0x0.st: uploads temporarily disabled by operator")
         if code != 0 or not out.startswith("http"):
             raise RuntimeError(f"0x0.st upload failed: {err or out}")
         url = out.strip().split()[0]
@@ -514,6 +509,107 @@ class FilebinService(BaseService):
         code, _, _ = self._curl(["-L", "-o", output_path, url])
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
+class SendVisEeService(BaseService):
+    """send.vis.ee wrapper — delegates to `ffsend` CLI."""
+    name = "send.vis.ee"
+    max_size_mb = 2500
+    default_expiry = "1d/20dl"
+    needs_key = False
+
+    def _ffsend(self) -> str:
+        """Find ffsend executable."""
+        for cmd in ["ffsend"]:
+            if shutil.which(cmd):
+                return cmd
+        return ""
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        ffs = self._ffsend()
+        if not ffs:
+            raise RuntimeError("send.vis.ee requires `ffsend` CLI. Install: cargo install ffsend || brew install ffsend")
+        expires = kwargs.get("expires_hours", 24)
+        code, out, err = self._curl([])  # dummy to get subprocess
+        # Use subprocess directly — not a curl call
+        try:
+            result = subprocess.run(
+                [ffs, "upload", "--copy", "file", file_path, "--host", "https://send.vis.ee", "-e", str(expires)],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"ffsend failed: {result.stderr}")
+            url = result.stdout.strip().split()[-1]
+            if not url.startswith("http"):
+                raise RuntimeError(f"ffsend: no URL in output: {result.stdout}")
+            return UploadResult(url=url, service="send.vis.ee", expires_in=f"{expires}h")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("ffsend upload timed out")
+
+    def download(self, url: str, output_path: str) -> bool:
+        ffs = self._ffsend()
+        if not ffs:
+            raise RuntimeError("send.vis.ee download requires `ffsend` CLI")
+        try:
+            result = subprocess.run(
+                [ffs, "download", url, "-o", output_path],
+                capture_output=True, text=True, timeout=120
+            )
+            return result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        except subprocess.TimeoutExpired:
+            return False
+
+class WormholeService(BaseService):
+    """wormhole.app wrapper — delegates to `wormhole` CLI."""
+    name = "wormhole"
+    max_size_mb = 10000
+    default_expiry = "24h/100dl"
+    needs_key = False
+
+    def _wh(self) -> str:
+        for cmd in ["wormhole", "wormhole-cli"]:
+            if shutil.which(cmd):
+                return cmd
+        return ""
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        wh = self._wh()
+        if not wh:
+            raise RuntimeError("wormhole requires `wormhole` CLI. Install: pip install magic-wormhole")
+        try:
+            result = subprocess.run(
+                [wh, "send", "--text", file_path] if os.path.getsize(file_path) < 1024 * 32 else [wh, "send", file_path],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"wormhole failed: {result.stderr}")
+            # Parse output for wormhole code
+            for line in result.stdout.splitlines():
+                if "wormhole:" in line.lower() or "send-file" in line.lower():
+                    code_match = re.search(r'wormhole:\s*(\d+-\w+-\w+)', line)
+                    if code_match:
+                        return UploadResult(
+                            url=f"https://wormhole.app/#{code_match.group(1)}",
+                            service="wormhole", expires_in="24h/100dl", file_id=code_match.group(1)
+                        )
+            raise RuntimeError(f"wormhole: no code found in output:\n{result.stdout}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("wormhole upload timed out")
+
+    def download(self, url: str, output_path: str) -> bool:
+        wh = self._wh()
+        if not wh:
+            raise RuntimeError("wormhole download requires `wormhole` CLI")
+        code_match = re.search(r'#([\w-]+)', url)
+        if not code_match:
+            return False
+        try:
+            result = subprocess.run(
+                [wh, "receive", code_match.group(1), "-o", output_path],
+                capture_output=True, text=True, timeout=120
+            )
+            return result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        except subprocess.TimeoutExpired:
+            return False
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -538,6 +634,8 @@ class TmpCli:
             "uguu": UguuService(),
             "tmpfiles": TmpfilesService(),
             "filebin": FilebinService(),
+            "send.vis.ee": SendVisEeService(),
+            "wormhole": WormholeService(),
         }
 
     def load_perf(self):
@@ -747,6 +845,9 @@ def main():
     # update
     upd = subparsers.add_parser("update", help="Update tmpcli from GitHub")
 
+    # uninstall
+    uns = subparsers.add_parser("uninstall", help="Remove tmpcli from system")
+
     args = parser.parse_args()
     cli = TmpCli()
 
@@ -802,10 +903,6 @@ def main():
                     continue
                 mb = f"{info['max_mb']}MB" if info['max_mb'] else "unlimited"
                 print(f"{name:<16} │ {info['upload']:^6} │ {info['download']:^8} │ {mb:^8} │ {info['expiry']:<12}")
-            if "_skipped" in CATALOG:
-                print("\nSkipped (require client-side crypto or captcha):")
-                for svc, reason in CATALOG["_skipped"].items():
-                    print(f"  {svc}: {reason['reason']}")
 
     elif args.command == "update":
         try:
@@ -813,6 +910,40 @@ def main():
         except Exception as e:
             print(f"[!] Update failed: {e}", file=sys.stderr)
             sys.exit(1)
+
+    elif args.command == "uninstall":
+        import shutil
+        removed = []
+        # Remove wrapper scripts
+        for cand in [Path.home() / ".local/bin/tmpcli",
+                       Path.home() / "bin/tmpcli",
+                       "/usr/local/bin/tmpcli"]:
+            if cand.is_file() or cand.is_symlink():
+                cand.unlink(missing_ok=True)
+                removed.append(str(cand))
+        # Remove installed source
+        for inst_dir in [Path.home() / ".tmp-cli",
+                         Path.home() / ".config/tmp-cli",
+                         Path.home() / ".local/share/tmp-cli"]:
+            if inst_dir.exists():
+                for f in ("tmpcli", "install.sh", "tmpcli.bak"):
+                    fp = inst_dir / f
+                    if fp.exists():
+                        fp.unlink(missing_ok=True)
+                # Remove dir if empty
+                if inst_dir.exists() and not any(inst_dir.iterdir()):
+                    inst_dir.rmdir()
+                removed.append(str(inst_dir))
+        # Remove perf cache
+        perf_file = Path.home() / ".config/tmp-cli/perf.json"
+        if perf_file.exists():
+            perf_file.unlink(missing_ok=True)
+            removed.append(str(perf_file))
+        print(f"[+] Uninstalled. Removed:", file=sys.stderr)
+        for r in removed:
+            print(f"    {r}", file=sys.stderr)
+        sys.exit(0)
+
     else:
         parser.print_help()
 

@@ -2,18 +2,33 @@
 
 **Universal command-line file uploader/downloader for temporary file hosts.**
 
-Upload files to 13+ anonymous hosts and download from any of them — no accounts, no sign-up, no API keys (mostly).
+Upload files to 15+ anonymous hosts and download from any of them — no accounts, no sign-up, no API keys (mostly).
 
 ---
 
 ## One-Line Install
 
+### Linux / macOS / WSL
+
 ```bash
-# Linux / macOS / WSL
+# curl
 curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
 
-# Or wget
+# Or wget (POSIX mode)
 wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
+```
+
+### Windows PowerShell (no WSL required)
+
+```powershell
+# PowerShell install (run as Administrator not required)
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/evangit2/tmp-cli/master/tmpcli" -OutFile "$env:USERPROFILE\.tmp-cli\tmpcli"
+
+# Create a simple batch wrapper
+'@echo off' + "`r`n" + 'python3 "%USERPROFILE%\.tmp-cli\tmpcli" %*' | Out-File -FilePath "$env:USERPROFILE\.tmp-cli\tmpcli.bat"
+
+# Add to PATH for this session
+$env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
 ```
 
 **Requirements:** `python3` and `curl`. No compilation. No package managers. No root.
@@ -29,20 +44,15 @@ wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh |
 | **temp.sh**        | ✓     | ✓        | 4 GB     | 3 days       | Simple API |
 | **gofile**         | ✓     | ✓        | unlimited | variable     | Dynamic token auth |
 | **pixeldrain**     | 🔑    | ✓        | 10 GB    | 60 days      | Upload needs API key |
-| **0x0.st**         | ✗     | ✓        | 512 MB   | 30d–1y      | Uploads disabled |
+| **0x0.st**         | ✓*    | ✓        | 512 MB   | 30d–1y      | *Often disabled by operator |
 | **drop.plz.ac**    | ✓     | ✓        | 100 MB   | 60 min       | Cloudflare-backed |
 | **sharenation**    | ✓     | ✓        | 250 MB   | 1 min–1 day  | +5DL safeguard |
 | **x0.at**          | ✓     | ✓        | 1 GB     | unknown      | CLI-friendly Austria host |
 | **uguu**           | ✓     | ✓        | 128 MB   | 3 hours      | Pomf.se fork |
 | **tmpfiles**       | ✓     | ✓        | 100 MB   | 1 min–48h    | /tmp/files |
 | **filebin**        | ✓     | ✓        | unlimited | unknown     | Raw PUT, no expiry |
-| **termbin**        | ✓     | ✓        | text     | unknown      | TCP/Netcat; may timeout on some networks |
-
-**Skipped (require client-side crypto / captcha):**
-- `biohost.app` — Cloudflare Turnstile blocks automation
-- `box.juicey.dev` — Upload API endpoint unknown / undiscovered
-- `send.vis.ee` — Client-side encryption required (use [`ffsend`](https://github.com/timvisee/ffsend))
-- `wormhole.app` — Client-side encryption required (use [`wormhole-cli`](https://github.com/Mimickal/wormhole-cli))
+| **send.vis.ee**    | ✓*    | ✓*       | 2.5 GB   | 1d/20dl      | *Requires `ffsend` CLI |
+| **wormhole**       | ✓*    | ✓*       | 10 GB    | 24h/100dl    | *Requires `magic-wormhole` CLI |
 
 ---
 
@@ -79,6 +89,9 @@ tmpcli list --perf
 
 # Self-update from latest GitHub version
 tmpcli update
+
+# Uninstall (removes wrapper, source, cache)
+tmpcli uninstall
 ```
 
 ---
@@ -124,23 +137,36 @@ fi
 Paste this into any AI agent (Hermes, OpenClaw, etc.) to install tmp-cli automatically:
 
 ```
-Install tmp-cli (universal temp file uploader) for this user:
-1. Download and run: curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
-2. Verify with: tmpcli list
-3. Add to memory: tmpcli is the universal temp-file CLI. Usage:
-   - Upload: tmpcli up FILE [-s SERVICE] [--expires SECONDS]
-   - Download: tmpcli dl URL [-o OUTPUT]
-   - List/catalog: tmpcli list / tmpcli catalog [--json]
-   - Update: tmpcli update
-   Services: catbox (perm, 200MB), litterbox (1GB, 1h-72h), temp.sh (4GB, 3d),
-   gofile (unlimited, dynamic auth), drop.plz.ac (100MB, 60m), sharenation (250MB, 1m-1d),
-   x0.at (1GB), uguu (128MB, 3h), tmpfiles (100MB, 1m-48h), filebin (unlimited).
-   Smart auto-selects based on file size and past upload speed. No accounts needed.
-   Pixeldrain upload requires PIXELDRAIN_API_KEY env var.
+1. Run: curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
+2. Verify: tmpcli list
+3. Add this EXACT text to your memory (inside brackets):
+
+---BEGIN_AGENT_MEMORY---
+tmpcli: cross-platform file uploader/downloader for 15+ temp file hosts. Usage:
+  UPLOAD: tmpcli up FILE [-s SERVICE] [--expires SECONDS] [-q]
+  DOWNLOAD: tmpcli dl URL [-o OUTPUT] 
+  CATALOG: tmpcli catalog [--json]
+  LIST+PERF: tmpcli list --perf
+  UPDATE: tmpcli update
+  UNINSTALL: tmpcli uninstall
+Auto-selects fastest service by file size. No accounts. Key services: catbox (200MB permanent), litterbox (1GB 1h-72h), temp.sh (4GB 3d), x0.at (1GB), filebin (unlimited). External CLI needed: send.vis.ee (ffsend), wormhole (magic-wormhole). Pixeldrain upload requires PIXELDRAIN_API_KEY env var. 0x0.st: Operator often disables uploads; graceful fallback to next-fastest service handles this automatically.
+---END_AGENT_MEMORY---
 ```
+
+**Important:** Only quote the text between `---BEGIN_AGENT_MEMORY---` and `---END_AGENT_MEMORY---` in your memory. That's the token-efficient summary the agent needs. Lines outside the brackets are install instructions, not memory content.
 
 ---
 
-## License
+## License & Credits
 
-MIT
+**MIT License**
+
+This project is inspired by and builds upon:
+
+- **ffsend** — Mozilla Send CLI tool by [Tim Visée](https://github.com/timvisee). `send.vis.ee` integration delegates to the `ffsend` binary rather than reimplementing E2E encryption.
+- **magic-wormhole** — File transfer with human-readable codes by Brian Warner and contributors ([GitHub](https://github.com/magic-wormhole/magic-wormhole)). `wormhole.app` integration delegates to the `wormhole` CLI rather than reimplementing PAKE encryption.
+- **gofile** reverse-engineered token generation adapted from community research into their dynamic auth flow.
+
+These tools are credited and remain the property of their respective authors. This project wraps them for unified discoverability, smart routing, and agent integration — it does not bundle their code.
+
+---
