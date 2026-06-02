@@ -56,6 +56,8 @@ $env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
 | **wormhole**       | ✗     | ✓        | 10 GB    | session      | Interactive only; use `wormhole receive <code>` |
 | **isrv**           | ✓     | ✓        | 1 GB     | 7d–365d     | Open source (`isrv.nl`); expiration auto-scales by file size |
 | **tempfile.org**   | ✓     | ✓        | 100 MB   | 1h–48h      | REST API; field name is `files` not `file` |
+| **fsend.me**       | ✓     | ✓        | unlimited | 7 days    | transfer.sh-style PUT upload; supports `Max-Downloads`/`Max-Days` headers |
+| **fars.ee**        | ✓     | ✓        | 10 MB    | unknown    | pb fork; content-addressed (SHA1); field `c`; `?u=1` for URL-only response |
 
 ---
 

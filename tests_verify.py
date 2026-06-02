@@ -34,7 +34,7 @@ os.environ.pop("PIXELDRAIN_API_KEY", None)
 CLI = tc.TmpCli()
 
 # Test file: 1KB of pseudo-random bytes (deterministic content for hash compare)
-TEST_CONTENT = (b"tmpcli verification test - " * 32)
+TEST_CONTENT = (b"tmpcli verification test - " * 32) + os.urandom(32)  # random tail makes each run unique
 TEST_HASH = hashlib.sha256(TEST_CONTENT).hexdigest()
 TEST_FILE = "/tmp/tmpcli_verify_test.bin"
 Path(TEST_FILE).write_bytes(TEST_CONTENT)

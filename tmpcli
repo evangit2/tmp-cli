@@ -41,6 +41,8 @@ CATALOG = {
     "wormhole":     {"upload":"✗","download":"✓","max_mb":10000, "expiry":"session","notes":"Interactive only; receive via wormhole receive <code>"},
     "isrv":         {"upload":"✓","download":"✓","max_mb":1024, "expiry":"7d–365d","notes":"Open source (isrv.nl); expiration auto-scaled by file size"},
     "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
+    "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
+    "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
 }
 
 UPLOAD_SERVICES = [k for k in CATALOG if not k.startswith("_") and CATALOG[k]["upload"] != "✗"]
@@ -783,6 +785,111 @@ class TmpfileOrgService(BaseService):
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 
+class FsendMeService(BaseService):
+    """fsend.me — transfer.sh-inspired, 7-day default retention, raw PUT upload.
+
+    API is a single PUT to https://fsend.me/<filename> where the request body
+    is the file content (NOT multipart/form-data). Server returns the URL on
+    the response body. Optional headers:
+      - Max-Downloads: N (delete after N downloads)
+      - Max-Days: N (delete after N days, default 7)
+    The file path in the URL is the original filename; the server picks a
+    short hash prefix.
+    """
+    name = "fsend.me"
+    max_size_mb = 0   # server docs don't specify, transfer.sh-style is generous
+    default_expiry = "7 days"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        # Map our kwargs to fsend.me headers
+        # Default: no download cap, 7 days retention
+        max_downloads = kwargs.get("max_downloads", "")
+        max_days = kwargs.get("max_days", "")
+        filename = os.path.basename(file_path)
+        # Build headers
+        headers = []
+        if max_downloads:
+            headers += ["-H", f"Max-Downloads: {max_downloads}"]
+        if max_days:
+            headers += ["-H", f"Max-Days: {max_days}"]
+        # Use --upload-file (PUT) NOT -F (multipart)
+        cmd = ["curl", "-sS", "--upload-file", file_path] + headers + [f"https://fsend.me/{filename}"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("fsend.me upload timed out")
+        url = r.stdout.strip()
+        if not url.startswith("http"):
+            raise RuntimeError(f"fsend.me bad response: {r.stdout[:200]}")
+        return UploadResult(url=url, service="fsend.me",
+                            expires_in=f"{max_days or 7} days")
+
+    def download(self, url: str, output_path: str) -> bool:
+        code, _, _ = self._curl(["-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
+class FarsEeService(BaseService):
+    """fars.ee — pb/pastebin fork, content-addressed (SHA1-keyed) storage.
+
+    API: POST https://fars.ee/ with multipart field `c=<file>`.
+    Response is NOT JSON — it's a line-separated key:value text:
+        date: <iso8601>
+        digest: <sha1 of file>
+        long: <base64 long id>
+        short: <short id>
+        size: <bytes>
+        status: <created|already exists|expired>
+        url: https://fars.ee/<short>.bin
+        uuid: <uuid>
+    Use ?u=1 query param to get URL-only response (single line).
+    Optional fields: p=1 (private, uses long URL), sunset=<seconds> (self-destruct).
+    Append .<ext> to URL for proper mimetype hint.
+    Server explicitly warns: "Please do NOT post large files" — so keep <=10MB.
+    """
+    name = "fars.ee"
+    max_size_mb = 10
+    default_expiry = "unknown"
+
+    _API = "https://fars.ee/"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        # Build form fields. Field name is "c", not "file".
+        args = ["-F", f"c=@{file_path}"]
+        # Sunset (self-destruct) in seconds
+        sunset = kwargs.get("sunset_seconds", "")
+        if sunset:
+            args += ["-F", f"sunset={sunset}"]
+        # Private paste flag
+        if kwargs.get("private"):
+            args += ["-F", "p=1"]
+        # ?u=1 returns URL only, simpler to parse
+        url_only = "1"
+        code, out, err = self._curl(args + [f"{self._API}?u={url_only}"])
+        if code != 0:
+            raise RuntimeError(f"fars.ee upload failed: {err}")
+        url = out.strip()
+        if not url.startswith("http"):
+            # fars.ee is content-addressed (SHA1) — if the same file was already
+            # uploaded, the server returns just the status line without the
+            # URL. The file is still retrievable, but the server won't tell us
+            # where. The caller can retry with different content if they need
+            # a fresh URL; the service itself doesn't try to recover the URL
+            # because the server has no digest-lookup API.
+            raise RuntimeError(
+                f"fars.ee: {url!r} (file already uploaded to fars.ee with this "
+                f"exact content; no way to recover the existing URL. Use a "
+                f"different file or add a unique suffix.)"
+            )
+        return UploadResult(url=url, service="fars.ee",
+                            expires_in=f"{sunset}s" if sunset else "unknown")
+
+    def download(self, url: str, output_path: str) -> bool:
+        # fars.ee serves the file directly at the URL
+        code, _, _ = self._curl(["-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -811,6 +918,8 @@ class TmpCli:
             "wormhole": WormholeService(),
             "isrv": IsrvService(),
             "tempfile.org": TmpfileOrgService(),
+            "fsend.me": FsendMeService(),
+            "fars.ee": FarsEeService(),
         }
 
     def load_perf(self):
