@@ -42,6 +42,7 @@ CATALOG = {
     "isrv":         {"upload":"✓","download":"✓","max_mb":1024, "expiry":"7d–365d","notes":"Open source (isrv.nl); expiration auto-scaled by file size"},
     "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
     "tmpfile.link": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"7 days", "notes":"Cloudflare Workers CDN; multi-host d1-d10.tfdl.net for binaries"},
+    "box.juicey.dev": {"upload":"✓","download":"✓","max_mb":2048, "expiry":"3 days", "notes":"Open-source; content-addressed (SHA-256 dedup); 10-files-per-IP cap"},
     "paste.rs":     {"upload":"✓","download":"✓","max_mb":4,    "expiry":"unknown","notes":"Text-only; raw POST body; modern termbin replacement"},
     "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
     "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
@@ -981,6 +982,85 @@ class PasteRsService(BaseService):
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 
+class JuiceboxService(BaseService):
+    """box.juicey.dev — open-source temp file host, content-addressed, 2GB max.
+
+    API: POST https://box.juicey.dev/upload with multipart field `file=@...`.
+    Response JSON has two shapes:
+      - new file: {"files":["<id>.bin"],"truncated":bool,"remaining":N,
+                              "limit_reached":bool}
+      - duplicate (same SHA-256 already on server): {"duplicate":true,
+                              "file":"<id>.bin","meta":{...,"hash":...}}
+    Either way, the download URL is `https://box.juicey.dev/f/<filename>`.
+    Verified: SHA-256 of uploaded file == SHA-256 of downloaded file (roundtrip).
+
+    Caveats:
+      - 10 active files per IP (server-enforced; extras get 413). For tmpcli
+        automation this is rarely a problem.
+      - Default retention is 3 days; users select 1h-14d via web UI.
+        No client-controllable retention via the multipart API.
+      - max_file_bytes=2GB per /api/config. Streaming upload not enabled,
+        so large files use the same single multipart POST.
+    """
+    name = "box.juicey.dev"
+    max_size_mb = 2048
+    default_expiry = "3 days (1h-14d selectable)"
+
+    _API = "https://box.juicey.dev/upload"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        code, out, err = self._curl(["-F", f"file=@{file_path}", self._API])
+        if code != 0:
+            raise RuntimeError(f"box.juicey.dev upload failed: {err}")
+        try:
+            resp = json.loads(out)
+        except json.JSONDecodeError:
+            # 413 (oversize) returns HTML
+            if "413" in out or "Payload Too Large" in out:
+                raise RuntimeError(
+                    "box.juicey.dev: 413 — file exceeds 2GB limit. "
+                    "Note: 413 also returned for the per-IP file cap; the JSON "
+                    "form is preferred (see below)."
+                )
+            raise RuntimeError(f"box.juicey.dev bad JSON: {out[:200]}")
+        # Handle the structured file_limit error (clearer than the 413 HTML)
+        if isinstance(resp, dict) and resp.get("code") == "file_limit":
+            msg = resp.get("message", "file limit reached")
+            # Avoid double period if server message already ends in one
+            suffix = "." if not msg.rstrip().endswith(".") else ""
+            raise RuntimeError(
+                f"box.juicey.dev: {msg}{suffix} Delete an older upload via the "
+                f"web UI (https://box.juicey.dev/mine) and retry."
+            )
+        # Both new and duplicate responses have a "file" or "files" key
+        fname = resp.get("file") or (resp.get("files", [None])[0])
+        if not fname:
+            raise RuntimeError(f"box.juicey.dev: no filename in response: {resp}")
+        url = f"https://box.juicey.dev/f/{fname}"
+        # If duplicate, prefer the meta hash for verification
+        meta = resp.get("meta", {})
+        is_dup = resp.get("duplicate", False)
+        expires_in = "unknown"
+        if meta.get("expires") and meta.get("set"):
+            import time as _t
+            secs = int(meta["expires"]) - int(_t.time())
+            if secs > 0:
+                days = secs // 86400
+                hours = (secs % 86400) // 3600
+                expires_in = f"{days}d{hours}h"
+        return UploadResult(
+            url=url, service="box.juicey.dev",
+            expires_in=expires_in,
+            file_id=fname,
+            token="" if not is_dup else "dedup"
+        )
+
+    def download(self, url: str, output_path: str) -> bool:
+        # box.juicey.dev serves the file directly at /f/<filename>
+        code, _, _ = self._curl(["-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -1010,6 +1090,7 @@ class TmpCli:
             "isrv": IsrvService(),
             "tempfile.org": TmpfileOrgService(),
             "tmpfile.link": TmpfileLinkService(),
+            "box.juicey.dev": JuiceboxService(),
             "paste.rs": PasteRsService(),
             "fsend.me": FsendMeService(),
             "fars.ee": FarsEeService(),
