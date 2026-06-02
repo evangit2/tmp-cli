@@ -5,6 +5,8 @@
 #   $env:TMPCLI_REPO = "https://raw.githubusercontent.com/evangit2/tmp-cli/master"
 #   $env:TMPCLI_HOME = "$HOME\.tmp-cli"
 #   irm ... | iex
+#
+# Version: 2 (cmd /c probe bypasses Microsoft Store alias NativeCommandError)
 
 $ErrorActionPreference = 'Stop'
 
