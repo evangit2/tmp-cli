@@ -27,18 +27,17 @@ irm https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.ps1 | iex
 
 That's it. The installer creates `tmpcli.cmd`, `tmpcli.ps1`, and `tmpcli.bat` in `~\bin` (or `~\.local\bin`), adds that directory to your **user** PATH (not system, no admin needed), and downloads the latest `tmpcli` to `%USERPROFILE%\.tmp-cli\tmpcli`. **Open a new PowerShell/cmd window** for the PATH change to take effect.
 
-If you prefer the manual route:
+#### ⚠️ Windows Execution Policy (one-time fix)
+
+Windows PowerShell blocks `.ps1` scripts by default — so `tmpcli list` will fail with `running scripts is disabled on this system` until you set a permissive policy. Run this **once** in PowerShell (no admin needed, current user only):
 
 ```powershell
-# PowerShell install (run as Administrator not required)
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/evangit2/tmp-cli/master/tmpcli" -OutFile "$env:USERPROFILE\.tmp-cli\tmpcli"
-
-# Create a simple batch wrapper
-'@echo off' + "`r`n" + 'python3 "%USERPROFILE%\.tmp-cli\tmpcli" %*' | Out-File -FilePath "$env:USERPROFILE\.tmp-cli\tmpcli.bat"
-
-# Add to PATH for this session
-$env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
+
+Then close and reopen your terminal. After that, plain `tmpcli list` works everywhere.
+
+**Prefer zero-policy-changes?** The installer also creates a `tmpcli.cmd` shim that bypasses execution policy entirely. Just use `tmpcli.cmd list` instead of `tmpcli list` — same tool, no policy change.
 
 **Requirements:** `python3` and `curl`. No compilation. No package managers. No root.
 
