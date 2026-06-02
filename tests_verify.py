@@ -11,11 +11,19 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# Load tmpcli source file directly (it has no .py extension) using runpy
+# Load tmpcli source file. Default to the file in this repo (so we test the
+# in-tree version); fall back to ~/.tmp-cli/tmpcli if run from elsewhere.
+import os
+_this_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+_local_copy = _this_dir / "tmpcli"
+if _local_copy.exists():
+    _tmpcli_path = _local_copy
+else:
+    _tmpcli_path = Path.home() / ".tmp-cli" / "tmpcli"
 import runpy
-_globals = runpy.run_path(str(Path.home() / ".tmp-cli" / "tmpcli"), run_name="tmpcli")
+_globals = runpy.run_path(str(_tmpcli_path), run_name="tmpcli")
 # TmpCli class and BaseService etc. are now in _globals
-tc = type("TC", (), _globals)  # simple namespace holder for attributes we use
+tc = type("TC", (), _globals)
 tc.TmpCli = _globals["TmpCli"]
 
 # Force subprocess PATH to include ~/.local/bin so wormhole/ffsend are found
@@ -36,6 +44,11 @@ TEST_SIZE = len(TEST_CONTENT)
 SKIP = set()
 if not os.environ.get("PIXELDRAIN_API_KEY"):
     SKIP.add("pixeldrain")
+# 0x0 is currently disabled by operator (per their server message) — document only
+SKIP.add("0x0")
+# termbin TCP unreachable, wormhole interactive
+SKIP.add("termbin")
+SKIP.add("wormhole")
 
 # termbin is text-only, but we can still test it with the binary since it's small
 # Wormhole is interactive and hard to test in a script — test only the upload code path
@@ -75,7 +88,12 @@ def main():
 
     results = []
     for svc_name in services:
-        print(f"\n[{svc_name}]", file=sys.stderr)
+        # Skip interactive-only services (wormhole) and disabled (0x0)
+        if svc_name in SKIP:
+            print(f"\n[{svc_name}]", file=sys.stderr)
+            print(f"  SKIPPED (interactive-only or needs API key)", file=sys.stderr)
+            results.append((svc_name, "SKIPPED", None, None, "skipped by design"))
+            continue
         upload_result = verify_upload(svc_name)
         if upload_result[0] is None:
             print(f"  UPLOAD FAILED: {upload_result[2]}", file=sys.stderr)

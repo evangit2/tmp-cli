@@ -54,6 +54,8 @@ $env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
 | **filebin**        | ✓     | ✓        | unlimited | unknown     | Raw PUT, no expiry |
 | **send.vis.ee**    | ✓     | ✓        | 2.5 GB   | 1d/20dl      | Requires `ffsend` CLI |
 | **wormhole**       | ✗     | ✓        | 10 GB    | session      | Interactive only; use `wormhole receive <code>` |
+| **isrv**           | ✓     | ✓        | 1 GB     | 7d–365d     | Open source (`isrv.nl`); expiration auto-scales by file size |
+| **tempfile.org**   | ✓     | ✓        | 100 MB   | 1h–48h      | REST API; field name is `files` not `file` |
 
 ---
 

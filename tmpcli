@@ -39,6 +39,8 @@ CATALOG = {
     "filebin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"Raw PUT, no expiry"},
     "send.vis.ee":  {"upload":"✓","download":"✓","max_mb":2500, "expiry":"1d/20dl","notes":"Requires ffsend CLI"},
     "wormhole":     {"upload":"✗","download":"✓","max_mb":10000, "expiry":"session","notes":"Interactive only; receive via wormhole receive <code>"},
+    "isrv":         {"upload":"✓","download":"✓","max_mb":1024, "expiry":"7d–365d","notes":"Open source (isrv.nl); expiration auto-scaled by file size"},
+    "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
 }
 
 UPLOAD_SERVICES = [k for k in CATALOG if not k.startswith("_") and CATALOG[k]["upload"] != "✗"]
@@ -689,6 +691,98 @@ class WormholeService(BaseService):
         except subprocess.TimeoutExpired:
             return False
 
+
+class IsrvService(BaseService):
+    """isrv.nl — open-source anonymous file sharing.
+
+    Expiration semantics: default is auto-calculated from file size (7d for small
+    files up to 365d for tiny files, scaled by size). The `expires` form field
+    can be either hours (e.g. "24") or a Unix timestamp. Capped at 365d.
+    Returns JSON: {"status":"success","filename":"<url>","expiration":"<iso8601>"}.
+    """
+    name = "isrv"
+    max_size_mb = 1024
+    default_expiry = "7d–365d"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        # expires can be hours (e.g. 24) or a unix timestamp. Default to 24h
+        # (86400 seconds) for predictable behavior; the server's auto-scaling
+        # may produce longer defaults.
+        expires = kwargs.get("expires_seconds", 86400)
+        # Cap to 365 days (isrv's documented max)
+        expires = min(expires, 365 * 86400)
+        code, out, err = self._curl([
+            "-F", f"file=@{file_path}",
+            "-F", f"expires={expires}",
+            "https://isrv.nl/"
+        ])
+        if code != 0:
+            raise RuntimeError(f"isrv upload failed: {err}")
+        try:
+            resp = json.loads(out)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"isrv bad JSON: {out[:200]}")
+        if resp.get("status") != "success":
+            raise RuntimeError(f"isrv API error: {resp}")
+        url = resp.get("filename", "")
+        if not url.startswith("http"):
+            raise RuntimeError(f"isrv: no filename in response: {resp}")
+        return UploadResult(url=url, service="isrv",
+                            expires_in=resp.get("expiration", ""))
+
+    def download(self, url: str, output_path: str) -> bool:
+        code, _, _ = self._curl(["-L", "-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
+class TmpfileOrgService(BaseService):
+    """tempfile.org — REST API, no account, 100MB cap, 1-48h expiry.
+
+    Important: multipart field name is `files` (not `file` or `files[]`).
+    Server returns JSON: {"success":true,"files":[{"id":..,"url":"https://tempfile.org/<id>/",..}]}.
+    Direct download URL is `<page_url>/download` (NOT the page itself).
+    """
+    name = "tempfile.org"
+    max_size_mb = 100
+    default_expiry = "1h–48h"
+
+    # API endpoint
+    _API = "https://tempfile.org/api/upload/local"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        # Default 24h; valid values per API docs are 1, 6, 24, 48
+        hours = int(kwargs.get("expires_hours", 24))
+        if hours not in (1, 6, 24, 48):
+            hours = 24
+        code, out, err = self._curl([
+            "-F", f"files=@{file_path}",  # NOTE: field is "files", not "file"
+            "-F", f"expiryHours={hours}",
+            self._API
+        ])
+        if code != 0:
+            raise RuntimeError(f"tempfile.org upload failed: {err}")
+        try:
+            resp = json.loads(out)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"tempfile.org bad JSON: {out[:200]}")
+        if not resp.get("success"):
+            raise RuntimeError(f"tempfile.org API error: {resp}")
+        files = resp.get("files", [])
+        if not files:
+            raise RuntimeError(f"tempfile.org: no files in response: {resp}")
+        f = files[0]
+        page_url = f.get("url", "")
+        # Direct download URL is the page URL + "download" (not the page itself
+        # which is an HTML preview)
+        direct_url = page_url.rstrip("/") + "/download"
+        return UploadResult(url=direct_url, service="tempfile.org",
+                            expires_in=f"{hours}h", file_id=f.get("id", ""))
+
+    def download(self, url: str, output_path: str) -> bool:
+        code, _, _ = self._curl(["-L", "-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -715,6 +809,8 @@ class TmpCli:
             "filebin": FilebinService(),
             "send.vis.ee": SendVisEeService(),
             "wormhole": WormholeService(),
+            "isrv": IsrvService(),
+            "tempfile.org": TmpfileOrgService(),
         }
 
     def load_perf(self):
