@@ -51,24 +51,54 @@ Write-Host "    Platform: windows (PowerShell $($PSVersionTable.PSVersion))"
 Write-Host "    Install dir: $TMPCLI_DIR"
 Write-Host "    Bin dir:     $BINDIR"
 
-# Check Python
-$py = $null
-foreach ($name in @('python3', 'python', 'py')) {
-    $found = Get-Command $name -ErrorAction SilentlyContinue
-    if ($found) { $py = $name; break }
-}
-if (-not $py) {
-    Write-Host "[!] Python 3 is required but not found in PATH." -ForegroundColor Red
-    Write-Host "    Install from https://python.org/downloads/ (check 'Add to PATH'),"
-    Write-Host "    or via 'winget install Python.Python.3.12' / 'choco install python'."
-    exit 1
-}
-Write-Host "    Python: $(& $py --version 2>&1)"
-
-# Download main script
+# Create install dir first so partial runs leave the right filesystem state
+# (and so re-running after installing Python "just works")
 if (-not (Test-Path $TMPCLI_DIR)) {
     New-Item -ItemType Directory -Path $TMPCLI_DIR -Force | Out-Null
 }
+
+# Check Python. On Windows 10/11, `python3` and `python` are often broken
+# Microsoft Store "App Execution Aliases" that print "Python was not found"
+# even when no real Python is installed. The reliable approach is to actually
+# invoke --version on each candidate and check for a working interpreter.
+# We only check the names Windows actually exposes in PATH: python3, python,
+# and py (the Python Launcher for Windows).
+$py = $null
+$pyVer = $null
+foreach ($name in @('python3', 'python', 'py')) {
+    $found = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $found) { continue }
+    # Try --version with error capture. The MS Store aliases print an error
+    # and exit non-zero; real Python prints "Python 3.x.y" and exits 0.
+    $ver = & $name --version 2>&1
+    if ($LASTEXITCODE -eq 0 -and $ver -match 'Python 3') {
+        $py = $name
+        $pyVer = $ver
+        break
+    }
+}
+if (-not $py) {
+    Write-Host "[!] Python 3 is required but no working interpreter was found." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "    On Windows 10/11, the 'python3' and 'python' commands often point"
+    Write-Host "    to broken Microsoft Store placeholders. To fix this:"
+    Write-Host ""
+    Write-Host "    1. Install Python from https://python.org/downloads/  (check"
+    Write-Host "       'Add Python to PATH' in the installer) — recommended"
+    Write-Host ""
+    Write-Host "    2. OR use the Windows Package Manager:"
+    Write-Host "       winget install Python.Python.3.12"
+    Write-Host ""
+    Write-Host "    3. OR via Chocolatey:"
+    Write-Host "       choco install python"
+    Write-Host ""
+    Write-Host "    Then re-run this installer. (Install dir was already created at"
+    Write-Host "    $TMPCLI_DIR so a re-run is safe.)"
+    exit 1
+}
+Write-Host "    Python: $pyVer"
+
+# Download main script
 $scriptPath = Join-Path $TMPCLI_DIR 'tmpcli'
 Write-Host "    Downloading $REPO/tmpcli ..."
 try {
