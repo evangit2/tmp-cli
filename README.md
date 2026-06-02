@@ -45,14 +45,15 @@ $env:PATH = "$env:USERPROFILE\.tmp-cli;" + $env:PATH
 | **gofile**         | ✓     | ✓        | unlimited | variable     | Dynamic token auth |
 | **pixeldrain**     | 🔑    | ✓        | 10 GB    | 60 days      | Upload needs API key |
 | **0x0.st**         | ✓*    | ✓        | 512 MB   | 30d–1y      | *Often disabled by operator |
+| **termbin**        | ✗     | ✓        | —        | unknown      | TCP 9999 often firewalled; service is intermittently down |
 | **drop.plz.ac**    | ✓     | ✓        | 100 MB   | 60 min       | Cloudflare-backed |
 | **sharenation**    | ✓     | ✓        | 250 MB   | 1 min–1 day  | +5DL safeguard |
 | **x0.at**          | ✓     | ✓        | 1 GB     | unknown      | CLI-friendly Austria host |
 | **uguu**           | ✓     | ✓        | 128 MB   | 3 hours      | Pomf.se fork |
 | **tmpfiles**       | ✓     | ✓        | 100 MB   | 1 min–48h    | /tmp/files |
 | **filebin**        | ✓     | ✓        | unlimited | unknown     | Raw PUT, no expiry |
-| **send.vis.ee**    | ✓*    | ✓*       | 2.5 GB   | 1d/20dl      | *Requires `ffsend` CLI |
-| **wormhole**       | ✓*    | ✓*       | 10 GB    | 24h/100dl    | *Requires `magic-wormhole` CLI |
+| **send.vis.ee**    | ✓     | ✓        | 2.5 GB   | 1d/20dl      | Requires `ffsend` CLI |
+| **wormhole**       | ✗     | ✓        | 10 GB    | session      | Interactive only; use `wormhole receive <code>` |
 
 ---
 
