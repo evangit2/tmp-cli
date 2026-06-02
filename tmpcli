@@ -43,6 +43,7 @@ CATALOG = {
     "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
     "tmpfile.link": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"7 days", "notes":"Cloudflare Workers CDN; multi-host d1-d10.tfdl.net for binaries"},
     "box.juicey.dev": {"upload":"✓","download":"✓","max_mb":2048, "expiry":"3 days", "notes":"Open-source; content-addressed (SHA-256 dedup); 10-files-per-IP cap"},
+    "originless":   {"upload":"✓","download":"✓","max_mb":50,   "expiry":"permanent","notes":"IPFS-backed (originless.gupt.app); CID = SHA-256; accessible via any IPFS gateway"},
     "paste.rs":     {"upload":"✓","download":"✓","max_mb":4,    "expiry":"unknown","notes":"Text-only; raw POST body; modern termbin replacement"},
     "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
     "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
@@ -1061,6 +1062,61 @@ class JuiceboxService(BaseService):
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 
+class OriginlessService(BaseService):
+    """originless.gupt.app — IPFS-backed file host (Originless public gateway).
+
+    API: POST https://originless.gupt.app/upload with multipart field `file=@...`.
+    Also supports /uploadzip for zip uploads.
+    Response JSON: {"status":"success","url":"https://dweb.link/ipfs/<CID>?filename=...",
+                    "cid":"Qm...","size":N,"type":"...","filename":"..."}.
+
+    The CID IS the SHA-256 of the file (IPFS uses the same content-addressing).
+    Files are pinned to IPFS and accessible via any IPFS gateway (dweb.link,
+    cloudflare-ipfs.com, ipfs.io, etc.). Effectively permanent.
+
+    Caveats:
+      - Cloudflare's default 100MB request-body limit (returns 413 HTML).
+      - Single public instance (originless.gupt.app); not a "service" per se.
+        If that gateway dies, the IPFS content is still accessible via the
+        CID, but the upload endpoint is gone.
+    """
+    name = "originless"
+    max_size_mb = 50
+    default_expiry = "permanent (IPFS)"
+
+    _API = "https://originless.gupt.app/upload"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        code, out, err = self._curl(["-F", f"file=@{file_path}", self._API])
+        if code != 0:
+            raise RuntimeError(f"originless upload failed: {err}")
+        try:
+            resp = json.loads(out)
+        except json.JSONDecodeError:
+            if "413" in out or "Payload Too Large" in out:
+                raise RuntimeError(
+                    "originless: 413 — file exceeds Cloudflare's request-body "
+                    "limit (~100MB). Try a smaller file or a different service."
+                )
+            raise RuntimeError(f"originless bad JSON: {out[:200]}")
+        if resp.get("status") != "success":
+            raise RuntimeError(f"originless API error: {resp}")
+        url = resp.get("url", "")
+        cid = resp.get("cid", "")
+        if not url or not cid:
+            raise RuntimeError(f"originless: missing url/cid in response: {resp}")
+        return UploadResult(
+            url=url, service="originless",
+            expires_in="permanent",
+            file_id=cid
+        )
+
+    def download(self, url: str, output_path: str) -> bool:
+        # originless serves the file at dweb.link/ipfs/<CID>
+        code, _, _ = self._curl(["-L", "-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -1091,6 +1147,7 @@ class TmpCli:
             "tempfile.org": TmpfileOrgService(),
             "tmpfile.link": TmpfileLinkService(),
             "box.juicey.dev": JuiceboxService(),
+            "originless": OriginlessService(),
             "paste.rs": PasteRsService(),
             "fsend.me": FsendMeService(),
             "fars.ee": FarsEeService(),
