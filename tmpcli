@@ -41,6 +41,7 @@ CATALOG = {
     "wormhole":     {"upload":"✗","download":"✓","max_mb":10000, "expiry":"session","notes":"Interactive only; receive via wormhole receive <code>"},
     "isrv":         {"upload":"✓","download":"✓","max_mb":1024, "expiry":"7d–365d","notes":"Open source (isrv.nl); expiration auto-scaled by file size"},
     "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
+    "tmpfile.link": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"7 days", "notes":"Cloudflare Workers CDN; multi-host d1-d10.tfdl.net for binaries"},
     "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
     "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
 }
@@ -890,6 +891,43 @@ class FarsEeService(BaseService):
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 
+class TmpfileLinkService(BaseService):
+    """tmpfile.link — Cloudflare Workers-backed temp file host, no auth, 100MB.
+
+    API: POST https://tmpfile.link/api/upload with multipart field `file=@...`.
+    Response JSON: {"fileName": ..., "downloadLink": "https://d1-d10.tfdl.net/...",
+                    "downloadLinkEncoded": ..., "size": ..., "type": ...}.
+    "Safe" types (images, docs) are served from `d.tmpfile.link`; "unsafe" types
+    (archives, binaries) are served from `d1-d10.tfdl.net`. Both hostnames serve
+    the raw file at the URL. 7-day auto-deletion for anonymous uploads; no
+    client-controllable expiry (expiry is server-side fixed). 100MB max.
+    """
+    name = "tmpfile.link"
+    max_size_mb = 100
+    default_expiry = "7 days"
+
+    _API = "https://tmpfile.link/api/upload"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        code, out, err = self._curl(["-F", f"file=@{file_path}", self._API])
+        if code != 0:
+            raise RuntimeError(f"tmpfile.link upload failed: {err}")
+        try:
+            resp = json.loads(out)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"tmpfile.link bad JSON: {out[:200]}")
+        url = resp.get("downloadLink", "")
+        if not url.startswith("http"):
+            raise RuntimeError(f"tmpfile.link: no downloadLink in response: {resp}")
+        return UploadResult(url=url, service="tmpfile.link",
+                            expires_in="7 days",
+                            file_id=resp.get("fileName", ""))
+
+    def download(self, url: str, output_path: str) -> bool:
+        code, _, _ = self._curl(["-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -918,6 +956,7 @@ class TmpCli:
             "wormhole": WormholeService(),
             "isrv": IsrvService(),
             "tempfile.org": TmpfileOrgService(),
+            "tmpfile.link": TmpfileLinkService(),
             "fsend.me": FsendMeService(),
             "fars.ee": FarsEeService(),
         }
