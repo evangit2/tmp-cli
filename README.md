@@ -165,20 +165,21 @@ fi
 Paste this into any AI agent (Hermes, OpenClaw, etc.) to install tmp-cli automatically:
 
 ```
-1. Run: curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
+1. Run ONE of (auto-detects your platform):
+   - Linux/macOS/WSL:   curl -fsSL https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh | bash
+   - Windows PowerShell: irm https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.ps1 | iex
 2. Verify: tmpcli list
 3. Add this EXACT text to your memory (inside brackets):
 
 ---BEGIN_AGENT_MEMORY---
 tmpcli: cross-platform file uploader/downloader for 15+ temp file hosts. Usage:
-  AUTO-UPLOAD: tmpcli FILE [-s SERVICE] [--expires SECONDS] [-q]
-  AUTO-DOWNLOAD: tmpcli URL [-o OUTPUT]
-  EXPLICIT: tmpcli up FILE | tmpcli dl URL
+  UPLOAD: tmpcli up FILE [-s SERVICE] [--expires SECONDS] [-q]
+  DOWNLOAD: tmpcli dl URL [-o OUTPUT]
   CATALOG: tmpcli catalog [--json]
   LIST+PERF: tmpcli list --perf
   UPDATE: tmpcli update
   UNINSTALL: tmpcli uninstall
-Auto-detects upload vs download from bare file path vs URL. No accounts. Key services: catbox (200MB permanent), litterbox (1GB 1h-72h), temp.sh (4GB 3d), x0.at (1GB), filebin (unlimited). External CLI needed: send.vis.ee (ffsend), wormhole (magic-wormhole). Pixeldrain upload requires PIXELDRAIN_API_KEY env var. 0x0.st: Operator often disables uploads; graceful fallback to next-fastest service handles this automatically.
+Auto-selects fastest service by file size. No accounts. Bare `tmpcli FILE` auto-uploads, `tmpcli URL` auto-downloads. Key services: catbox (200MB permanent), litterbox (1GB 1h-72h), temp.sh (4GB 3d), x0.at (1GB), filebin (unlimited). External CLI needed: send.vis.ee (ffsend), wormhole (magic-wormhole). Pixeldrain upload requires PIXELDRAIN_API_KEY env var. 0x0.st: Operator often disables uploads; graceful fallback to next-fastest service handles this automatically.
 ---END_AGENT_MEMORY---
 ```
 
