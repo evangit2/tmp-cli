@@ -21,6 +21,15 @@ wget -qO- https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.sh |
 ### Windows PowerShell (no WSL required)
 
 ```powershell
+# One-liner: downloads, sets up wrappers, adds to user PATH
+irm https://raw.githubusercontent.com/evangit2/tmp-cli/master/install.ps1 | iex
+```
+
+That's it. The installer creates `tmpcli.cmd`, `tmpcli.ps1`, and `tmpcli.bat` in `~\bin` (or `~\.local\bin`), adds that directory to your **user** PATH (not system, no admin needed), and downloads the latest `tmpcli` to `%USERPROFILE%\.tmp-cli\tmpcli`. **Open a new PowerShell/cmd window** for the PATH change to take effect.
+
+If you prefer the manual route:
+
+```powershell
 # PowerShell install (run as Administrator not required)
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/evangit2/tmp-cli/master/tmpcli" -OutFile "$env:USERPROFILE\.tmp-cli\tmpcli"
 
