@@ -42,6 +42,7 @@ CATALOG = {
     "isrv":         {"upload":"✓","download":"✓","max_mb":1024, "expiry":"7d–365d","notes":"Open source (isrv.nl); expiration auto-scaled by file size"},
     "tempfile.org": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"1h–48h", "notes":"REST API; field name is 'files' not 'file'"},
     "tmpfile.link": {"upload":"✓","download":"✓","max_mb":100,  "expiry":"7 days", "notes":"Cloudflare Workers CDN; multi-host d1-d10.tfdl.net for binaries"},
+    "paste.rs":     {"upload":"✓","download":"✓","max_mb":4,    "expiry":"unknown","notes":"Text-only; raw POST body; modern termbin replacement"},
     "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
     "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
 }
@@ -928,6 +929,58 @@ class TmpfileLinkService(BaseService):
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 
+class PasteRsService(BaseService):
+    """paste.rs — minimal text-only paste service, 4MB cap, no auth.
+
+    API: `POST https://paste.rs/` with the raw text as the request body
+    (NOT multipart/form-data). Server returns the URL directly, e.g.
+    `https://paste.rs/AEZu7`. GET on the URL returns the text as-is.
+
+    This is the modern replacement for termbin (which is firewalled from
+    most residential / cloud IPs as of mid-2026). Marked text-only because
+    the server treats the body as UTF-8 text — uploading a binary file
+    will technically work for raw bytes but the URL is intended for
+    sharing text snippets, logs, code, etc.
+    """
+    name = "paste.rs"
+    max_size_mb = 4
+    default_expiry = "unknown (text only)"
+
+    _API = "https://paste.rs/"
+
+    def upload(self, file_path: str, **kwargs) -> UploadResult:
+        size = os.path.getsize(file_path)
+        if size > self.max_size_mb * 1024 * 1024:
+            raise RuntimeError(
+                f"paste.rs: file too large ({size} bytes > {self.max_size_mb}MB). "
+                f"paste.rs is text-only with a 4MB cap."
+            )
+        # Raw body upload via curl --data-binary @file. We use a fresh
+        # subprocess here (not self._curl) because the body is the file
+        # itself, not a multipart field.
+        cmd = ["curl", "-sS", "--max-time", "60", "-X", "POST",
+               "--data-binary", f"@{file_path}", self._API]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=70)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("paste.rs upload timed out")
+        url = r.stdout.strip()
+        if not url.startswith("http"):
+            # Common failure: 413 (file too large) returns HTML
+            if "413" in (r.stderr or "") or "Request Entity Too Large" in r.stdout:
+                raise RuntimeError(
+                    f"paste.rs: file exceeds server limit (~4MB). "
+                    f"Response: {r.stdout[:200]}"
+                )
+            raise RuntimeError(f"paste.rs bad response: {r.stdout[:200]}")
+        return UploadResult(url=url, service="paste.rs", expires_in="unknown")
+
+    def download(self, url: str, output_path: str) -> bool:
+        # paste.rs serves the text directly at the URL
+        code, _, _ = self._curl(["-o", output_path, url])
+        return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+
 # ─── Core CLI ──────────────────────────────────────────────────────────────
 
 class TmpCli:
@@ -957,6 +1010,7 @@ class TmpCli:
             "isrv": IsrvService(),
             "tempfile.org": TmpfileOrgService(),
             "tmpfile.link": TmpfileLinkService(),
+            "paste.rs": PasteRsService(),
             "fsend.me": FsendMeService(),
             "fars.ee": FarsEeService(),
         }
