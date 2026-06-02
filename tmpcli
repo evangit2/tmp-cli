@@ -30,15 +30,15 @@ CATALOG = {
     "gofile":       {"upload":"✓","download":"✓","max_mb":0,     "expiry":"variable","notes":"Dynamic token auth"},
     "pixeldrain":   {"upload":"🔑","download":"✓","max_mb":10240, "expiry":"60 days","notes":"Upload needs API key"},
     "0x0":          {"upload":"✓*","download":"✓","max_mb":512,   "expiry":"30d–1y","notes":"Uploads often disabled by operator"},
-    "termbin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"TCP text-only"},
+    "termbin":      {"upload":"✗","download":"✓","max_mb":0,     "expiry":"unknown","notes":"TCP 9999 often firewalled; service is intermittently down"},
     "drop.plz.ac":  {"upload":"✓","download":"✓","max_mb":100,   "expiry":"60 min","notes":"Cloudflare-backed"},
     "sharenation":  {"upload":"✓","download":"✓","max_mb":250,   "expiry":"1 min–1 day","notes":"+5-download safeguard"},
     "x0.at":        {"upload":"✓","download":"✓","max_mb":1024,  "expiry":"unknown","notes":"CLI-friendly Austria host"},
     "uguu":         {"upload":"✓","download":"✓","max_mb":128,   "expiry":"3 hours","notes":"Pomf.se fork"},
     "tmpfiles":     {"upload":"✓","download":"✓","max_mb":100,   "expiry":"1 min–48h","notes":"/tmp/files rebrand"},
     "filebin":      {"upload":"✓","download":"✓","max_mb":0,     "expiry":"unknown","notes":"Raw PUT, no expiry"},
-    "send.vis.ee":  {"upload":"✓*","download":"✓*","max_mb":2500, "expiry":"1d/20dl","notes":"Requires ffsend CLI"},
-    "wormhole":     {"upload":"✓*","download":"✓*","max_mb":10000, "expiry":"24h/100dl","notes":"Requires wormhole-cli"},
+    "send.vis.ee":  {"upload":"✓","download":"✓","max_mb":2500, "expiry":"1d/20dl","notes":"Requires ffsend CLI"},
+    "wormhole":     {"upload":"✗","download":"✓","max_mb":10000, "expiry":"session","notes":"Interactive only; receive via wormhole receive <code>"},
 }
 
 UPLOAD_SERVICES = [k for k in CATALOG if not k.startswith("_") and CATALOG[k]["upload"] != "✗"]
@@ -96,7 +96,22 @@ class BaseService(ABC):
         pass
 
     def _curl(self, args: List[str], capture_output=True, timeout=120) -> Tuple[int, str, str]:
+        # filebin's Varnish layer returns a 5KB anti-bot interstitial when it sees
+        # the bare tmpcli/1.1 UA. Most other services work fine with it, so the
+        # override is a per-call concern in filebin's service class.
         cmd = ["curl", "-s", "-L", "-A", "tmpcli/1.1"] + args
+        try:
+            result = subprocess.run(cmd, capture_output=capture_output, text=True, timeout=timeout)
+            return result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            return -1, "", "timeout"
+        except Exception as e:
+            return -1, "", str(e)
+
+    def _curl_browser(self, args: List[str], capture_output=True, timeout=120) -> Tuple[int, str, str]:
+        """Variant that uses a real browser User-Agent — needed for filebin's Varnish bot filter."""
+        cmd = ["curl", "-s", "-L",
+               "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"] + args
         try:
             result = subprocess.run(cmd, capture_output=capture_output, text=True, timeout=timeout)
             return result.returncode, result.stdout, result.stderr
@@ -363,25 +378,45 @@ class TermbinService(BaseService):
     default_expiry = "unknown (text only)"
 
     def upload(self, file_path: str, **kwargs) -> UploadResult:
+        # Termbin exposes a TCP paste service on port 9999. As of mid-2026 the
+        # TCP endpoint is often firewalled or unreachable from residential / cloud
+        # IPs, and the HTTPS endpoint returns 405 (legacy /upload route removed).
+        # We still try the TCP path first; if it fails we surface a clear error
+        # rather than silently failing.
         with open(file_path, "rb") as f:
             data = f.read()
         if len(data) > 1024 * 512:
             raise RuntimeError("termbin: file too large (>512KB text)")
+        import socket
+        s = None
         try:
-            import socket
-            s = socket.create_connection(("termbin.com", 9999), timeout=30)
+            s = socket.create_connection(("termbin.com", 9999), timeout=15)
             s.sendall(data + b"\n")
-            resp = s.recv(4096).decode().strip()
-            s.close()
-            if resp.startswith("http"):
-                return UploadResult(url=resp, service="termbin", expires_in="unknown")
+            s.settimeout(15)
+            buf = b""
+            while True:
+                try:
+                    chunk = s.recv(4096)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    break
+            url = buf.decode().strip().split()[0] if buf else ""
+            if url.startswith("http"):
+                return UploadResult(url=url, service="termbin", expires_in="unknown")
         except Exception as e:
-            pass
-        # Fallback via HTTP POST to /upload via curl
-        code, out, err = self._curl(["-X", "POST", "--data-binary", f"@{file_path}", "https://termbin.com/"])
-        if code != 0 or not out.startswith("http"):
-            raise RuntimeError(f"termbin upload failed: {err or out}")
-        return UploadResult(url=out.strip().split()[0], service="termbin", expires_in="unknown")
+            last_err = str(e)
+        finally:
+            if s:
+                try: s.close()
+                except: pass
+        raise RuntimeError(
+            f"termbin unreachable (TCP 9999 timed out, HTTP /upload returns 405). "
+            f"Service is intermittently down — try again later. Last err: {last_err if 'last_err' in dir() else 'unknown'}"
+        )
 
     def download(self, url: str, output_path: str) -> bool:
         code, _, _ = self._curl(["-o", output_path, url])
@@ -415,19 +450,24 @@ class ShareNationService(BaseService):
     default_expiry = "1 min–1 day"
 
     def upload(self, file_path: str, **kwargs) -> UploadResult:
-        expires = kwargs.get("expires_seconds", 3600)
+        import re
+        # sharenation `time` field is a Unix timestamp (seconds since epoch), NOT a duration.
+        # Passing 3600 (1970-01-01) instantly expires. Compute future timestamp.
+        expires_seconds = kwargs.get("expires_seconds", 86400)  # default 1 day
+        # Cap to sharenation's apparent max window (~1 day)
+        expires_seconds = min(expires_seconds, 86400)
+        expires_ts = int(time.time()) + expires_seconds
         code, out, err = self._curl([
             "-F", f"file=@{file_path}",
-            "-F", f"time={expires}",
+            "-F", f"time={expires_ts}",
             "https://sharenation.org/upload"
         ])
         # ShareNation returns HTML page with URL embedded; extract it
-        import re
-        url_match = re.search(r'https://sharenation\.org/\w+', out)
-        if code != 0 or (not out.startswith("http") and not url_match):
+        url_match = re.search(r'https://sharenation\.org/[a-zA-Z0-9_.-]+\.bin', out)
+        if code != 0 or not url_match:
             raise RuntimeError(f"sharenation upload failed: {err or out[:200]}")
-        url = url_match.group(0) if url_match else out.strip().split()[0]
-        return UploadResult(url=url, service="sharenation", expires_in=f"{expires}s")
+        return UploadResult(url=url_match.group(0), service="sharenation",
+                            expires_in=f"{expires_seconds}s")
 
     def download(self, url: str, output_path: str) -> bool:
         code, _, _ = self._curl(["-o", output_path, url])
@@ -491,7 +531,11 @@ class TmpfilesService(BaseService):
             resp = json.loads(out)
             if resp.get("status") != "success":
                 raise RuntimeError(f"tmpfiles error: {resp}")
-            return UploadResult(url=resp["data"]["url"], service="tmpfiles",
+            # API returns preview page URL (https://tmpfiles.org/<id>/<filename>)
+            # Direct download requires /dl/ prefix
+            preview_url = resp["data"]["url"]
+            direct_url = preview_url.replace("://tmpfiles.org/", "://tmpfiles.org/dl/", 1)
+            return UploadResult(url=direct_url, service="tmpfiles",
                                 expires_in=f"{expires}s")
         except json.JSONDecodeError:
             raise RuntimeError(f"tmpfiles bad JSON: {out[:200]}")
@@ -527,7 +571,8 @@ class FilebinService(BaseService):
             return UploadResult(url=dl, service="filebin", expires_in="unknown", file_id=bin_id)
 
     def download(self, url: str, output_path: str) -> bool:
-        code, _, _ = self._curl(["-L", "-o", output_path, url])
+        # Use browser UA — filebin's Varnish front returns an interstitial otherwise
+        code, _, _ = self._curl_browser(["-L", "-o", output_path, url])
         return code == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
 class SendVisEeService(BaseService):
@@ -549,18 +594,28 @@ class SendVisEeService(BaseService):
         if not ffs:
             raise RuntimeError("send.vis.ee requires `ffsend` CLI. Install: cargo install ffsend || brew install ffsend")
         expires = kwargs.get("expires_hours", 24)
-        code, out, err = self._curl([])  # dummy to get subprocess
-        # Use subprocess directly — not a curl call
+        # ffsend args: `upload -c <FILE> --host <URL>`. Old code had `upload --copy file <FILE>`
+        # which is wrong on two counts: --copy takes no value, and "file" was treated as a path.
+        # Also use -I (--no-interact) to suppress prompts.
         try:
             result = subprocess.run(
-                [ffs, "upload", "--copy", "file", file_path, "--host", "https://send.vis.ee", "-e", str(expires)],
+                [ffs, "upload", "-I", "-c", file_path,
+                 "--host", "https://send.vis.ee",
+                 "-e", str(expires)],
                 capture_output=True, text=True, timeout=120
             )
             if result.returncode != 0:
                 raise RuntimeError(f"ffsend failed: {result.stderr}")
-            url = result.stdout.strip().split()[-1]
-            if not url.startswith("http"):
-                raise RuntimeError(f"ffsend: no URL in output: {result.stdout}")
+            # URL is on stdout, but progress UI may also emit text. Find a line starting with http.
+            url = ""
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("http"):
+                    # First token on the URL line
+                    url = line.split()[0]
+                    break
+            if not url:
+                raise RuntimeError(f"ffsend: no URL in output:\nstdout={result.stdout}\nstderr={result.stderr[:300]}")
             return UploadResult(url=url, service="send.vis.ee", expires_in=f"{expires}h")
         except subprocess.TimeoutExpired:
             raise RuntimeError("ffsend upload timed out")
@@ -579,10 +634,20 @@ class SendVisEeService(BaseService):
             return False
 
 class WormholeService(BaseService):
-    """wormhole.app wrapper — delegates to `wormhole` CLI."""
+    """wormhole.app — interactive end-to-end encrypted transfer.
+
+    NOTE: Wormhole is fundamentally interactive. The sender generates a one-time
+    code, prints it to stdout, then blocks waiting for a receiver to enter it
+    on the other end. There is no persistent URL — once both sides have the
+    code, they negotiate a direct (or relayed) transfer. As such:
+      - `upload` here just produces the code and prints it. The transfer
+        completes only when a receiver uses `wormhole receive <code>`.
+      - `download` accepts a code and receives the file.
+    We surface this clearly in the error message and CLI output.
+    """
     name = "wormhole"
     max_size_mb = 10000
-    default_expiry = "24h/100dl"
+    default_expiry = "session-based"
     needs_key = False
 
     def _wh(self) -> str:
@@ -595,36 +660,29 @@ class WormholeService(BaseService):
         wh = self._wh()
         if not wh:
             raise RuntimeError("wormhole requires `wormhole` CLI. Install: pip install magic-wormhole")
-        try:
-            result = subprocess.run(
-                [wh, "send", "--text", file_path] if os.path.getsize(file_path) < 1024 * 32 else [wh, "send", file_path],
-                capture_output=True, text=True, timeout=120
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"wormhole failed: {result.stderr}")
-            # Parse output for wormhole code
-            for line in result.stdout.splitlines():
-                if "wormhole:" in line.lower() or "send-file" in line.lower():
-                    code_match = re.search(r'wormhole:\s*(\d+-\w+-\w+)', line)
-                    if code_match:
-                        return UploadResult(
-                            url=f"https://wormhole.app/#{code_match.group(1)}",
-                            service="wormhole", expires_in="24h/100dl", file_id=code_match.group(1)
-                        )
-            raise RuntimeError(f"wormhole: no code found in output:\n{result.stdout}")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("wormhole upload timed out")
+        # wormhole send prints a code and BLOCKS waiting for a receiver. We can't
+        # capture a URL — only the code. The right way to use this is interactive.
+        # For scripting, surface a clear error and let the user invoke it manually.
+        raise RuntimeError(
+            "wormhole is interactive-only: it generates a one-time code and waits "
+            "for a receiver to enter it. There is no URL to return. Run "
+            f"`{wh} send {file_path}` manually, share the code with the recipient, "
+            "and have them run `wormhole receive <code>`. For automated pipelines "
+            "use a real host (catbox, filebin, temp.sh, etc.) instead."
+        )
 
     def download(self, url: str, output_path: str) -> bool:
+        # Accept either a code directly (e.g. "3-cactus-pelican") or a full wormhole.app URL.
         wh = self._wh()
         if not wh:
             raise RuntimeError("wormhole download requires `wormhole` CLI")
-        code_match = re.search(r'#([\w-]+)', url)
+        code_match = re.search(r'#?(\d+-[a-z]+-[a-z]+)', url)
         if not code_match:
             return False
+        code = code_match.group(1)
         try:
             result = subprocess.run(
-                [wh, "receive", code_match.group(1), "-o", output_path],
+                [wh, "receive", code, "-o", output_path],
                 capture_output=True, text=True, timeout=120
             )
             return result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
