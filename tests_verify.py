@@ -141,5 +141,90 @@ def main():
     ], indent=2))
     print(f"\nResults saved to /tmp/tmpcli_verify_results.json", file=sys.stderr)
 
+    # Regression tests — invariant behaviors that should never break
+    print("\n" + "=" * 80, file=sys.stderr)
+    print("REGRESSION TESTS", file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
+    regression_ok = True
+
+    # Test 1: empty file must fail FAST (no infinite fallback loop)
+    print("\n[empty-file] expecting ValueError, not infinite loop...", file=sys.stderr)
+    empty = "/tmp/tmpcli_verify_empty.bin"
+    Path(empty).touch()
+    try:
+        CLI.upload(empty)
+        print("  ✗ FAIL: empty file did not raise", file=sys.stderr)
+        regression_ok = False
+    except ValueError as e:
+        if "empty" in str(e).lower():
+            print(f"  ✓ OK: {e}", file=sys.stderr)
+        else:
+            print(f"  ✗ FAIL: wrong error: {e}", file=sys.stderr)
+            regression_ok = False
+    except Exception as e:
+        print(f"  ✗ FAIL: wrong exception type: {type(e).__name__}: {e}", file=sys.stderr)
+        regression_ok = False
+    finally:
+        Path(empty).unlink(missing_ok=True)
+
+    # Test 2: missing file must raise FileNotFoundError, not fall through to network call
+    print("\n[missing-file] expecting FileNotFoundError...", file=sys.stderr)
+    try:
+        CLI.upload("/tmp/tmpcli_does_not_exist_xyz_12345")
+        print("  ✗ FAIL: missing file did not raise", file=sys.stderr)
+        regression_ok = False
+    except FileNotFoundError:
+        print("  ✓ OK: FileNotFoundError raised", file=sys.stderr)
+    except Exception as e:
+        print(f"  ✗ FAIL: wrong exception: {type(e).__name__}: {e}", file=sys.stderr)
+        regression_ok = False
+
+    # Test 3: smart-select with all services failing must NOT recurse forever
+    # (this was the original bug — recursion depth hit 1000+ on empty file)
+    print("\n[no-fallback-infinite-loop] recursion depth check...", file=sys.stderr)
+    try:
+        # Monkey-patch all uploaders to fail, then upload a real file.
+        # Without the visited-tracking fix, smart_select picks one,
+        # fails, recurses, picks another, fails, recurses, ...
+        import sys as _sys
+        call_count = [0]
+        real_uploads = CLI.services
+        for name, svc in real_uploads.items():
+            original = svc.upload
+            def make_failing(name, original=original):
+                def fail(*a, **kw):
+                    call_count[0] += 1
+                    if call_count[0] > 50:
+                        raise RuntimeError(f"simulated runaway after {call_count[0]} calls")
+                    raise RuntimeError(f"{name} simulated failure")
+                return fail
+            svc.upload = make_failing(name)
+        try:
+            CLI.upload(TEST_FILE)
+            print("  ✗ FAIL: upload should have raised", file=sys.stderr)
+            regression_ok = False
+        except RuntimeError as e:
+            # Should fail after at most ~17 services (one smart-select + fallbacks)
+            # NOT 1000+. If call_count is sane, this is fine.
+            if call_count[0] < 50:
+                print(f"  ✓ OK: failed after {call_count[0]} service attempts (no runaway)", file=sys.stderr)
+            else:
+                print(f"  ✗ FAIL: runaway — {call_count[0]} attempts", file=sys.stderr)
+                regression_ok = False
+        finally:
+            # Restore originals
+            for name, svc in real_uploads.items():
+                if hasattr(svc, '__class__') and 'upload' in svc.__dict__:
+                    # We replaced svc.upload on the instance, restore from class
+                    del svc.__dict__['upload']
+    except Exception as e:
+        print(f"  ✗ FAIL: unexpected error: {e}", file=sys.stderr)
+        regression_ok = False
+
+    if not regression_ok:
+        print("\n[!] REGRESSION TESTS FAILED", file=sys.stderr)
+        sys.exit(1)
+    print("\n[+] All regression tests passed", file=sys.stderr)
+
 if __name__ == "__main__":
     main()

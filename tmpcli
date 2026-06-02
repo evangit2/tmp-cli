@@ -991,10 +991,22 @@ class TmpCli:
         eligible.sort(key=score, reverse=True)
         return eligible[0]
 
-    def upload(self, file_path: str, service: str = None, **kwargs) -> UploadResult:
+    def upload(self, file_path: str, service: str = None, _tried: Optional[set] = None, **kwargs) -> UploadResult:
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(file_path)
+        # Reject empty files immediately — every host rejects 0-byte uploads and
+        # trying them all spins the fallback loop.
+        size = os.path.getsize(file_path)
+        if size == 0:
+            raise ValueError(f"refusing to upload empty file: {file_path}")
+
+        # Track which services have been tried in this call chain to prevent the
+        # recursive fallback loop from re-trying the same service (catbox → litterbox
+        # → catbox → ...). Only relevant when service is None (smart-select with
+        # fallback); explicit -s service is single-shot, no fallback.
+        if _tried is None:
+            _tried = set()
 
         if service:
             if service not in self.services:
@@ -1002,9 +1014,10 @@ class TmpCli:
             svc_name = service
         else:
             svc_name = self.smart_select(file_path)
+            _tried.add(svc_name)
 
         svc = self.services[svc_name]
-        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        size_mb = size / (1024 * 1024)
         print(f"[*] {svc_name} upload {_fmt_size(size_mb)}...", end="", file=sys.stderr)
 
         t0 = time.time()
@@ -1021,11 +1034,19 @@ class TmpCli:
             elapsed = time.time() - t0
             self.record_upload(svc_name, elapsed, False, size_mb)
             print(f"[!] {svc_name} failed: {e}", file=sys.stderr)
-            fallback = [s for s in UPLOAD_SERVICES if s != svc_name and not self.services[s].needs_key]
+            # Only fall back when this was a smart-select call (service=None);
+            # when the user explicitly named a service with -s, fail immediately.
+            if service is not None:
+                raise
+            # Try remaining services in score order, skipping any already tried.
+            fallback = [s for s in UPLOAD_SERVICES
+                        if s not in _tried
+                        and not self.services[s].needs_key]
             for fb in fallback[:3]:
                 print(f"[*] Trying fallback: {fb}...", file=sys.stderr)
+                _tried.add(fb)
                 try:
-                    return self.upload(file_path, service=fb, **kwargs)
+                    return self.upload(file_path, service=fb, _tried=_tried, **kwargs)
                 except Exception as e2:
                     print(f"[!] {fb} also failed: {e2}", file=sys.stderr)
             raise RuntimeError(f"All services failed. Last error: {e}")
@@ -1160,7 +1181,18 @@ def main():
             kwargs["filename"] = args.name
         if args.pixeldrain_key:
             os.environ["PIXELDRAIN_API_KEY"] = args.pixeldrain_key
-        result = cli.upload(args.file, service=args.service, **kwargs)
+        try:
+            result = cli.upload(args.file, service=args.service, **kwargs)
+        except FileNotFoundError:
+            print(f"[!] File not found: {args.file}", file=sys.stderr)
+            sys.exit(1)
+        except ValueError as e:
+            # Empty file, unknown service, etc.
+            print(f"[!] {e}", file=sys.stderr)
+            sys.exit(1)
+        except RuntimeError as e:
+            print(f"[!] {e}", file=sys.stderr)
+            sys.exit(1)
         if args.quiet:
             print(result.url)
         else:
