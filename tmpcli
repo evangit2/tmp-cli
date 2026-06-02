@@ -1309,4 +1309,9 @@ def main():
         parser.print_help()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl-C should exit cleanly, not dump a Python traceback.
+        print("\n[!] Aborted.", file=sys.stderr)
+        sys.exit(130)  # 130 is the conventional exit code for SIGINT
