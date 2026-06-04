@@ -1509,7 +1509,7 @@ def main():
         # Remove wrapper scripts
         for cand in [Path.home() / ".local/bin/tmpcli",
                        Path.home() / "bin/tmpcli",
-                       "/usr/local/bin/tmpcli"]:
+                       Path("/usr/local/bin/tmpcli")]:
             if cand.is_file() or cand.is_symlink():
                 cand.unlink(missing_ok=True)
                 removed.append(str(cand))
