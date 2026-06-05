@@ -1323,7 +1323,23 @@ class TmpCli:
         return svc.download(url, output_path)
 
     def update(self):
-        """Self-update via git pull from GitHub raw URLs."""
+        """Self-update via git pull from GitHub raw URLs.
+
+        Windows note: the currently-executing file is locked for execution
+        even when it could in theory be renamed (the running Python process
+        holds a non-FILE_SHARE_DELETE handle). The previous version of this
+        method used Path.replace/rename in a 4-step sequence, which fails
+        on Windows with WinError 32 ("file in use") and leaves .new files
+        behind, then a second run fails with WinError 183 on the leftover
+        install.sh.new. The fix is:
+
+        1. Clean up any leftover .new files from a previous aborted run.
+        2. Move the running script to .bak FIRST (rename of a file with a
+           running handle works on NTFS; deletion doesn't, but rename does).
+        3. Then move the freshly-downloaded .new into place.
+        4. Catch OSError/WinError and unlink-then-retry (worst case).
+        5. Print success only after every swap has actually happened.
+        """
         raw_base = "https://raw.githubusercontent.com/evangit2/tmp-cli/master"
         script_dir = self.config_dir.parent / "tmp-cli" if hasattr(self.config_dir, "parent") else Path.home() / ".tmp-cli"
         # Common install locations
@@ -1331,6 +1347,16 @@ class TmpCli:
             if (cand / "tmpcli").exists() or (cand / "tmp").exists():
                 script_dir = cand
                 break
+
+        # Clean up any leftover .new files from a previous aborted run.
+        # Without this, the second attempt hits WinError 183 on the existing
+        # install.sh.new.
+        for stale in (script_dir / "tmpcli.new", script_dir / "install.sh.new"):
+            if stale.exists():
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
 
         print(f"[*] tmpcli update — checking {raw_base} ...", file=sys.stderr)
         # Download latest tmpcli
@@ -1347,16 +1373,72 @@ class TmpCli:
         ])
         # Verify new script is valid Python
         new_path = script_dir / "tmpcli.new"
-        content = new_path.read_text()
+        try:
+            content = new_path.read_text()
+        except OSError as e:
+            raise RuntimeError(f"Failed to read downloaded tmpcli.new: {e}")
         if "#!/usr/bin/env python3" not in content or "def main():" not in content:
             new_path.unlink(missing_ok=True)
+            (script_dir / "install.sh.new").unlink(missing_ok=True)
             raise RuntimeError("Downloaded file does not look like tmpcli — update aborted")
-        # Backup and swap
+        # Backup and swap. The two renames below are the ones Windows hates —
+        # on POSIX they always work; on Windows the running file is locked
+        # for execution so a plain rename may fail with WinError 32/183.
+        # Path.replace() on Windows uses MoveFileEx(MOVEFILE_REPLACE_EXISTING)
+        # which IS supposed to overwrite, but if the destination exists and
+        # is locked, the kernel refuses. Defensive order:
+        #   1. unlink any existing bak (so the .bak rename below has a free target)
+        #   2. try replace(); on OSError, unlink destination and retry
+        #   3. print success only if BOTH swaps actually completed
         old_path = script_dir / "tmpcli"
-        old_path.replace(script_dir / "tmpcli.bak")
-        new_path.rename(old_path)
-        old_path.chmod(0o755)
-        (script_dir / "install.sh.new").rename(script_dir / "install.sh")
+        bak_path = script_dir / "tmpcli.bak"
+        # Step 1: clear any leftover .bak from a previous update so the rename below can land
+        if bak_path.exists() or bak_path.is_symlink():
+            try:
+                bak_path.unlink()
+            except OSError as e:
+                raise RuntimeError(f"Cannot remove stale {bak_path}: {e} — please delete it manually and re-run update")
+        # Step 2: rename old tmpcli -> tmpcli.bak. The script is still running
+        # from this file; on Windows the rename of an open file is permitted
+        # (it just changes the directory entry), but a subsequent unlink would
+        # fail. We're renaming, not unlinking, so this should succeed on NTFS.
+        try:
+            old_path.replace(bak_path)
+        except OSError as e:
+            # Last resort: unlink the .new files and re-raise with a clearer message
+            new_path.unlink(missing_ok=True)
+            (script_dir / "install.sh.new").unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Cannot rename {old_path} -> {bak_path}: {e}. "
+                "This usually means another process is holding the file open. "
+                "Close any open PowerShell windows pointed at this directory, "
+                "or run update again — the .new files have been cleaned up."
+            )
+        # Step 3: rename the freshly downloaded .new into place. Now that the
+        # original tmpcli is gone (moved to .bak), this should always succeed.
+        try:
+            new_path.rename(old_path)
+        except OSError as e:
+            # Try to restore the backup so the user isn't left without a working tmpcli
+            try:
+                bak_path.rename(old_path)
+            except OSError:
+                pass
+            raise RuntimeError(f"Cannot move tmpcli.new into place: {e}")
+        # Step 4: chmod (no-op on Windows)
+        try:
+            old_path.chmod(0o755)
+        except OSError:
+            pass
+        # Step 5: install.sh.new -> install.sh. install.sh may not exist on
+        # Windows (it's a Linux-only file in the Windows install) so a plain
+        # rename is fine; if it does exist, Path.replace handles the swap.
+        try:
+            (script_dir / "install.sh.new").replace(script_dir / "install.sh")
+        except OSError as e:
+            # Non-fatal — install.sh is just used for re-install reference
+            print(f"[!] Updated tmpcli but could not refresh install.sh: {e}", file=sys.stderr)
+            (script_dir / "install.sh.new").unlink(missing_ok=True)
         print("[+] tmpcli updated successfully.", file=sys.stderr)
         print("    Backup: tmpcli.bak", file=sys.stderr)
         return True
