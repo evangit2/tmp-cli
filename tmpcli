@@ -45,7 +45,7 @@ CATALOG = {
     "box.juicey.dev": {"upload":"✓","download":"✓","max_mb":2048, "expiry":"3 days", "notes":"Open-source; content-addressed (SHA-256 dedup); 10-files-per-IP cap"},
     "originless":   {"upload":"✓","download":"✓","max_mb":50,   "expiry":"permanent","notes":"IPFS-backed (originless.gupt.app); CID = SHA-256; accessible via any IPFS gateway"},
     "paste.rs":     {"upload":"✓","download":"✓","max_mb":4,    "expiry":"unknown","notes":"Text-only; raw POST body; modern termbin replacement"},
-    "fsend.me":     {"upload":"✓","download":"✓","max_mb":0,    "expiry":"7 days", "notes":"PUT-style upload; supports Max-Downloads/Max-Days headers"},
+    "fsend.me":     {"upload":"✓","download":"✓","max_mb":200,  "expiry":"7 days", "notes":"PUT-style upload; 200MB nginx cap; supports Max-Downloads/Max-Days headers"},
     "fars.ee":      {"upload":"✓","download":"✓","max_mb":10,   "expiry":"unknown","notes":"pb fork; content-addressed; field=c; ?u=1 returns URL only"},
 }
 
@@ -102,6 +102,18 @@ class BaseService(ABC):
     @abstractmethod
     def download(self, url: str, output_path: str) -> bool:
         pass
+
+    def _upload_timeout(self, file_path: str, min_t: int = 120, mbps: float = 1.5) -> int:
+        """Size-aware upload timeout. min_t covers the 0-byte case; mbps is a
+        conservative worst-case upload speed (1.5 MB/s ≈ 12 Mbps). Used by every
+        service that uploads via _curl/_curl_browser, so a 1.4GB file gets a
+        ~16min budget rather than the previous 120s hard cap that aborted every
+        large upload with a confusing "timeout" error."""
+        try:
+            size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        except OSError:
+            return min_t
+        return max(min_t, int(size_mb / mbps) + 30)  # +30s for connect/handshake
 
     def _curl(self, args: List[str], capture_output=True, timeout=120) -> Tuple[int, str, str]:
         # filebin's Varnish layer returns a 5KB anti-bot interstitial when it sees
@@ -162,7 +174,7 @@ class CatboxService(BaseService):
             "-F", "reqtype=fileupload",
             "-F", f"fileToUpload=@{file_path}",
             "https://catbox.moe/user/api.php"
-        ])
+        ], timeout=self._upload_timeout(file_path))
         if code != 0 or not out.startswith("http"):
             raise RuntimeError(f"Catbox upload failed: {err or out}")
         return UploadResult(url=out.strip(), service="catbox", expires_in="permanent")
@@ -183,7 +195,7 @@ class LitterboxService(BaseService):
             "-F", f"time={time_param}",
             "-F", f"fileToUpload=@{file_path}",
             "https://litterbox.catbox.moe/resources/internals/api.php"
-        ])
+        ], timeout=self._upload_timeout(file_path))
         if code != 0 or not out.startswith("http"):
             raise RuntimeError(f"Litterbox upload failed: {err or out}")
         return UploadResult(url=out.strip(), service="litterbox", expires_in=time_param)
@@ -201,7 +213,7 @@ class TempShService(BaseService):
         code, out, err = self._curl([
             "-F", f"file=@{file_path}",
             "https://temp.sh/upload"
-        ])
+        ], timeout=self._upload_timeout(file_path))
         if code != 0 or not out.startswith(("https://", "http://")):
             raise RuntimeError(f"temp.sh upload failed: {err or out}")
         return UploadResult(url=out.strip().split()[0], service="temp.sh", expires_in="3 days")
@@ -252,7 +264,8 @@ class GofileService(BaseService):
             server = data["data"]["servers"][0]["name"]
         except:
             pass
-        code, out, err = self._curl(["-F", f"file=@{file_path}", f"https://{server}.gofile.io/contents/uploadfile"])
+        code, out, err = self._curl(["-F", f"file=@{file_path}", f"https://{server}.gofile.io/contents/uploadfile"],
+                                     timeout=self._upload_timeout(file_path))
         if code != 0:
             raise RuntimeError(f"Gofile upload failed: {err}")
         try:
@@ -560,12 +573,12 @@ class FilebinService(BaseService):
     def upload(self, file_path: str, **kwargs) -> UploadResult:
         bin_id = kwargs.get("filebin_bin") or "tmpcli" + "".join(random.choices(string.ascii_lowercase, k=6))
         fname = kwargs.get("filename") or os.path.basename(file_path)
-        code, out, err = self._curl([
+        code, out, err = self._curl_browser([
             "-X", "PUT",
             "-H", "Content-type: application/octet-stream",
             "--data-binary", f"@{file_path}",
             f"https://filebin.net/{bin_id}/{fname}"
-        ])
+        ], timeout=self._upload_timeout(file_path))
         if code not in (0,):
             raise RuntimeError(f"filebin upload failed: {err}")
         try:
@@ -801,7 +814,7 @@ class FsendMeService(BaseService):
     short hash prefix.
     """
     name = "fsend.me"
-    max_size_mb = 0   # server docs don't specify, transfer.sh-style is generous
+    max_size_mb = 200  # server-side nginx limit: 200MB passes, 201MB gets 413. Probed 2026-06-04.
     default_expiry = "7 days"
 
     def upload(self, file_path: str, **kwargs) -> UploadResult:
@@ -810,8 +823,7 @@ class FsendMeService(BaseService):
         max_downloads = kwargs.get("max_downloads", "")
         max_days = kwargs.get("max_days", "")
         filename = os.path.basename(file_path)
-        # Build headers
-        headers = []
+        headers = ["-H", "Content-Type: application/octet-stream"]
         if max_downloads:
             headers += ["-H", f"Max-Downloads: {max_downloads}"]
         if max_days:
@@ -819,7 +831,8 @@ class FsendMeService(BaseService):
         # Use --upload-file (PUT) NOT -F (multipart)
         cmd = ["curl", "-sS", "--upload-file", file_path] + headers + [f"https://fsend.me/{filename}"]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=self._upload_timeout(file_path))
         except subprocess.TimeoutExpired:
             raise RuntimeError("fsend.me upload timed out")
         url = r.stdout.strip()
